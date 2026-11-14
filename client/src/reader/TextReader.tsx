@@ -145,6 +145,32 @@ export const TextReader = forwardRef<ReaderHandle, ReaderProps>(function TextRea
     });
   });
 
+  // Clicking inside a saved highlight opens its menu (CSS highlights aren't elements,
+  // so find the character under the pointer instead).
+  const onArticleClick = (e: React.MouseEvent) => {
+    const article = articleRef.current;
+    if (!highlights.onClick || !article || !window.getSelection()?.isCollapsed) return;
+    const doc = document as Document & {
+      caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?(x: number, y: number): Range | null;
+    };
+    const caret = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+    const range = caret ? null : doc.caretRangeFromPoint?.(e.clientX, e.clientY);
+    const node = caret?.offsetNode ?? range?.startContainer;
+    const offset = caret?.offset ?? range?.startOffset ?? 0;
+    if (!node || !article.contains(node)) return;
+    const before = document.createRange();
+    before.selectNodeContents(article);
+    before.setEnd(node, offset);
+    const at = before.toString().length;
+    const hit = [...highlights.items]
+      .reverse()
+      .find((h) => h.anchor.kind === 'text' && h.anchor.page === page && at >= h.anchor.start && at < h.anchor.end);
+    if (!hit || hit.anchor.kind !== 'text') return;
+    const hitRange = rangeFromOffsets(article, hit.anchor.start, hit.anchor.end);
+    if (hitRange) highlights.onClick(hit.id, rectOf(hitRange));
+  };
+
   // Paint highlights with the CSS Custom Highlight API (no DOM changes needed).
   useLayoutEffect(() => {
     const article = articleRef.current;
@@ -181,6 +207,7 @@ export const TextReader = forwardRef<ReaderHandle, ReaderProps>(function TextRea
     <div className={cx('paged-scroll text-scroll', `page-theme-${prefs.theme}`)} ref={scrollRef} onScroll={onScroll}>
       <article
         ref={articleRef}
+        onClick={onArticleClick}
         className={cx('text-page', book.format === 'md' && 'markdown')}
         style={{ fontSize: `${1.12 * prefs.fontScale}rem` }}
         // Plain text is escaped; Markdown output is sanitised with DOMPurify.

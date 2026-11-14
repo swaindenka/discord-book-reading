@@ -179,6 +179,7 @@ export function PointerSurface({
   highlights = [],
   draw,
   surfaceRef,
+  onHighlightClick,
 }: {
   page: number;
   cues: CueProps;
@@ -189,7 +190,9 @@ export function PointerSurface({
   highlights?: PageHighlight[];
   draw?: AreaDraw;
   surfaceRef?: RefObject<HTMLDivElement | null>;
+  onHighlightClick?: (id: string, rect: { left: number; top: number; right: number; bottom: number }) => void;
 }) {
+  const justDrew = useRef(false);
   const ownRef = useRef<HTMLDivElement>(null);
   const ref = surfaceRef ?? ownRef;
   const send = useRef(throttle((p: number, x: number | null, y: number | null) => cues.sendPointer(p, x, y), 50)).current;
@@ -250,7 +253,34 @@ export function PointerSurface({
       Math.abs(drag.y1 - drag.y0),
     ];
     setDrag(null);
+    justDrew.current = box[2] > 0.01 && box[3] > 0.005;
     if (box[2] > 0.01 && box[3] > 0.005) draw.onDone(box.map((n) => Math.round(n * 10000) / 10000) as Box);
+  };
+
+  // Clicking a saved highlight (without selecting text or drawing) opens its menu.
+  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (justDrew.current) {
+      justDrew.current = false;
+      return;
+    }
+    if (!onHighlightClick || !window.getSelection()?.isCollapsed) return;
+    const surface = ref.current?.getBoundingClientRect();
+    if (!surface || !surface.width) return;
+    const x = (e.clientX - surface.left) / surface.width;
+    const y = (e.clientY - surface.top) / surface.height;
+    const pad = 0.004;
+    for (const h of [...highlights].reverse()) {
+      const hit = h.rects.find(([rx, ry, rw, rh]) => x >= rx - pad && x <= rx + rw + pad && y >= ry - pad && y <= ry + rh + pad);
+      if (hit) {
+        onHighlightClick(h.id, {
+          left: surface.left + hit[0] * surface.width,
+          top: surface.top + hit[1] * surface.height,
+          right: surface.left + (hit[0] + hit[2]) * surface.width,
+          bottom: surface.top + (hit[1] + hit[3]) * surface.height,
+        });
+        return;
+      }
+    }
   };
 
   const onLeave = () => {
@@ -269,6 +299,7 @@ export function PointerSurface({
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
+      onClick={onClick}
       onPointerCancel={() => setDrag(null)}
       onPointerLeave={onLeave}
     >

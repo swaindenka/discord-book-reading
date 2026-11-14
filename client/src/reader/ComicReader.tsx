@@ -109,6 +109,7 @@ export const ComicReader = forwardRef<ReaderHandle, ReaderProps>(function ComicR
           className="comic-page"
           style={display ?? undefined}
           highlights={pageBoxes(highlights.items, page)}
+        onHighlightClick={highlights.onClick}
           draw={{
             enabled: highlights.drawing,
             color: highlights.color,
