@@ -1,7 +1,9 @@
+import { useEffect, useRef } from 'react';
 import { Check, Hand, LogOut, Mic, Play, SkipForward, UserPlus } from 'lucide-react';
 import type { RoomState } from '../../../shared/types';
 import { Avatar } from '../components/ui';
-import { formatDuration } from '../util';
+import { cx, formatDuration } from '../util';
+import { useToast } from '../components/Toasts';
 import { useNow, type RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
 
@@ -12,9 +14,25 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
   const elapsed = reader ? now + room.clockOffset.current - reader.since : 0;
   const canStart = !reader && state.queue.length > 0 && (view.isMod || view.nextUp?.id === view.me.id);
   const queueLocked = state.settings.queueLocked && !view.isMod;
+  const toast = useToast();
+  const limitMs = state.settings.turnMinutes * 60_000;
+  const overTime = Boolean(reader && limitMs > 0 && elapsed >= limitMs);
+
+  // Remind the reader once per turn when their suggested time is up.
+  const reminded = useRef<number | null>(null);
+  useEffect(() => {
+    if (!overTime || !view.isReader || !reader || reminded.current === reader.since) return;
+    reminded.current = reader.since;
+    toast.show(`Your ${state.settings.turnMinutes} minutes are up. Finish at a good stopping point.`, 'info');
+  }, [overTime, view.isReader, reader, state.settings.turnMinutes, toast]);
 
   return (
-    <div className={`turn-bar ${view.isReader ? 'my-turn' : ''}`}>
+    <div className={cx('turn-bar', view.isReader && 'my-turn')}>
+      {reader && limitMs > 0 && (
+        <div className={cx('turn-meter', overTime && 'over')} aria-hidden>
+          <div style={{ width: `${Math.min(100, (elapsed / limitMs) * 100)}%` }} />
+        </div>
+      )}
       <div className="turn-current">
         {reader ? (
           <>
@@ -22,7 +40,12 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
             <div className="turn-text">
               <strong>{view.isReader ? 'Your turn to read' : `${reader.name} is reading`}</strong>
               <span className="muted small">
-                <Mic size={12} aria-hidden /> {formatDuration(elapsed)}
+                <Mic size={12} aria-hidden />{' '}
+                <span className={cx(overTime && 'over-time')}>
+                  {formatDuration(elapsed)}
+                  {limitMs > 0 && ` / ${formatDuration(limitMs)}`}
+                  {overTime && ' · over time'}
+                </span>
                 {!reader.online && ' · disconnected'}
                 {state.queue.length > 0 && view.nextUp && ` · next: ${view.nextUp.id === view.me.id ? 'you' : view.nextUp.name}`}
               </span>

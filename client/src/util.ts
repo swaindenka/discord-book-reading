@@ -1,3 +1,5 @@
+import type { Position } from '../../shared/types';
+
 export function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ');
 }
@@ -29,6 +31,14 @@ export function formatDay(ts: number) {
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** Short "where the group is" text for a saved reading position. */
+export function progressLabel(position: Position | null | undefined): string | null {
+  if (!position) return null;
+  if (position.kind === 'page') return `page ${position.page}`;
+  if (position.percent !== undefined) return `${Math.round(position.percent)}%`;
+  return position.label ?? null;
 }
 
 export function clamp(n: number, min: number, max: number) {

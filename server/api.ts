@@ -6,6 +6,7 @@ import type { Config } from './config.js';
 import type { Database, BookRecord, UserRecord } from './db.js';
 import { isValidUserId, requireUser, toPublicUser, type UserCache } from './auth.js';
 import { normalizeQuery, type Dictionary } from './dictionary.js';
+import { cleanTitle, looksLikeRawFilename, parseBookFilename } from '../shared/bookname.js';
 import type { BookStorage } from './storage.js';
 import { newId, UserError, type LiveRoom, type RoomManager } from './rooms.js';
 import {
@@ -53,14 +54,16 @@ async function sniffFormat(file: string, format: BookFormat): Promise<boolean> {
   }
 }
 
-function cleanTitle(raw: unknown, filename: string) {
-  const fromFile = path
-    .basename(filename)
-    .replace(/\.[^.]+$/, '')
-    .replace(/[_]+/g, ' ')
-    .trim();
-  const title = (typeof raw === 'string' && raw.trim() ? raw : fromFile).replace(/\s+/g, ' ').trim();
-  return title.slice(0, LIMITS.bookTitle) || 'Untitled book';
+/** Title and author for an upload: what the uploader typed, or a tidied-up file name. */
+function bookName(rawTitle: unknown, rawAuthor: unknown, filename: string) {
+  const parsed = parseBookFilename(path.basename(filename));
+  const typedTitle = typeof rawTitle === 'string' ? cleanTitle(rawTitle) : '';
+  const typedAuthor = typeof rawAuthor === 'string' ? rawAuthor.replace(/\s+/g, ' ').trim() : '';
+  return {
+    title: (typedTitle || parsed.title).slice(0, LIMITS.bookTitle) || 'Untitled book',
+    // An explicitly empty author field means "no author"; a missing one falls back to the file name.
+    author: (typeof rawAuthor === 'string' ? typedAuthor : (parsed.author ?? '')).slice(0, LIMITS.bookAuthor) || null,
+  };
 }
 
 export function apiRouter({ config, db, storage, rooms, users, dictionary }: ApiDeps) {
@@ -80,7 +83,13 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
     });
 
   /** Validates and stores an uploaded file; always removes the temp file. */
-  async function storeBook(file: Express.Multer.File, rawTitle: unknown, roomId: string, user: UserRecord) {
+  async function storeBook(
+    file: Express.Multer.File,
+    rawTitle: unknown,
+    rawAuthor: unknown,
+    roomId: string,
+    user: UserRecord,
+  ) {
     try {
       const format = formatFromFilename(file.originalname);
       if (!format) {
@@ -96,7 +105,7 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
       const book: BookRecord = {
         id,
         roomId,
-        title: cleanTitle(rawTitle, file.originalname),
+        ...bookName(rawTitle, rawAuthor, file.originalname),
         format,
         storageKey: `${id}.${format}`,
         size: file.size,
@@ -245,7 +254,8 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
       const user = req.user!;
       const file = req.file;
       try {
-        const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, LIMITS.roomName) : '';
+        const rawName = typeof req.body?.name === 'string' ? req.body.name.replace(/\s+/g, ' ').trim() : '';
+        const name = (looksLikeRawFilename(rawName) ? parseBookFilename(rawName).title : rawName).slice(0, LIMITS.roomName);
         const description =
           typeof req.body?.description === 'string' ? req.body.description.trim().slice(0, LIMITS.roomDescription) : '';
         if (!name) throw new UserError('Give your room a name.');
@@ -255,7 +265,7 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
         const room = await rooms.create(user, name, description);
         if (file) {
           try {
-            const book = await storeBook(file, req.body?.title, room.id, user);
+            const book = await storeBook(file, req.body?.title, req.body?.author, room.id, user);
             await room.addBook(book, user);
           } catch (err) {
             await rooms.delete(room);
@@ -297,7 +307,7 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
         if (room.books.length >= config.maxBooksPerRoom) {
           throw new UserError(`A room can hold up to ${config.maxBooksPerRoom} books. Delete one first.`);
         }
-        const book = await storeBook(file, req.body?.title, room.id, req.user!);
+        const book = await storeBook(file, req.body?.title, req.body?.author, room.id, req.user!);
         await room.addBook(book, req.user!);
         res.status(201).json({ id: book.id });
       } finally {

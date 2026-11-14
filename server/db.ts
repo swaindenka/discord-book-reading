@@ -10,7 +10,8 @@ import type {
   Position,
   RoomSettings,
 } from '../shared/types.js';
-import { DEFAULT_ROOM_SETTINGS } from '../shared/types.js';
+import { DEFAULT_ROOM_SETTINGS, LIMITS } from '../shared/types.js';
+import { looksLikeRawFilename, parseBookFilename } from '../shared/bookname.js';
 
 export interface UserRecord {
   id: string;
@@ -53,6 +54,7 @@ export interface BookRecord {
   id: string;
   roomId: string;
   title: string;
+  author: string | null;
   format: BookFormat;
   storageKey: string;
   size: number;
@@ -199,6 +201,7 @@ function rowToBook(row: Row): BookRecord {
     id: String(row.id),
     roomId: String(row.room_id),
     title: String(row.title),
+    author: str(row.author),
     format: String(row.format) as BookFormat,
     storageKey: String(row.storage_key),
     size: num(row.size),
@@ -235,6 +238,40 @@ export class Database {
 
   async migrate() {
     await this.client.batch(SCHEMA, 'write');
+    // Columns added after the first release.
+    const bookColumns = (await this.all('PRAGMA table_info(books)')).map((r) => String(r.name));
+    if (!bookColumns.includes('author')) await this.run('ALTER TABLE books ADD COLUMN author TEXT');
+    await this.cleanupImportedNames();
+  }
+
+  /**
+   * Early versions used the raw download file name as the book title and room name
+   * ("A Man Called Ove A Novel -- Fredrik Backman -- 064e81… -- Anna's Archive").
+   * Tidy those up once; names people chose themselves are left alone.
+   */
+  private async cleanupImportedNames() {
+    const statements: { sql: string; args: InValue[] }[] = [];
+    for (const row of await this.all('SELECT id, title, author FROM books')) {
+      const title = String(row.title);
+      if (!looksLikeRawFilename(title)) continue;
+      const parsed = parseBookFilename(title);
+      statements.push({
+        sql: 'UPDATE books SET title = ?, author = ? WHERE id = ?',
+        args: [parsed.title.slice(0, LIMITS.bookTitle), str(row.author) ?? parsed.author, String(row.id)],
+      });
+    }
+    for (const row of await this.all('SELECT id, name FROM rooms')) {
+      const name = String(row.name);
+      if (!looksLikeRawFilename(name)) continue;
+      statements.push({
+        sql: 'UPDATE rooms SET name = ? WHERE id = ?',
+        args: [parseBookFilename(name).title.slice(0, LIMITS.roomName), String(row.id)],
+      });
+    }
+    if (statements.length) {
+      await this.client.batch(statements, 'write');
+      console.log(`[db] Tidied ${statements.length} book/room name(s) that were raw file names.`);
+    }
   }
 
   async close() {
@@ -314,10 +351,18 @@ export class Database {
   }
 
   async listRooms(): Promise<
-    (RoomRecord & { ownerName: string | null; bookCount: number; bookTitle: string | null; bookFormat: BookFormat | null })[]
+    (RoomRecord & {
+      ownerName: string | null;
+      bookCount: number;
+      bookTitle: string | null;
+      bookFormat: BookFormat | null;
+      bookAuthor: string | null;
+      bookPosition: Position | null;
+    })[]
   > {
     const rows = await this.all(
       `SELECT r.*, u.display_name AS owner_name, ab.title AS book_title, ab.format AS book_format,
+         ab.author AS book_author, ab.position AS book_position,
          (SELECT COUNT(*) FROM books b WHERE b.room_id = r.id) AS book_count
        FROM rooms r
        LEFT JOIN users u ON u.id = r.owner_id
@@ -330,6 +375,8 @@ export class Database {
       bookCount: num(row.book_count),
       bookTitle: str(row.book_title),
       bookFormat: (str(row.book_format) as BookFormat | null) ?? null,
+      bookAuthor: str(row.book_author),
+      bookPosition: parseJson<Position | null>(row.book_position, null),
     }));
   }
 
@@ -354,12 +401,13 @@ export class Database {
 
   async createBook(book: BookRecord): Promise<void> {
     await this.run(
-      `INSERT INTO books (id, room_id, title, format, storage_key, size, uploaded_by, position, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO books (id, room_id, title, author, format, storage_key, size, uploaded_by, position, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         book.id,
         book.roomId,
         book.title,
+        book.author,
         book.format,
         book.storageKey,
         book.size,
@@ -378,6 +426,10 @@ export class Database {
   async listBooks(roomId: string): Promise<BookRecord[]> {
     const rows = await this.all('SELECT * FROM books WHERE room_id = ? ORDER BY created_at ASC', [roomId]);
     return rows.map(rowToBook);
+  }
+
+  async updateBookDetails(id: string, title: string, author: string | null): Promise<void> {
+    await this.run('UPDATE books SET title = ?, author = ? WHERE id = ?', [title, author, id]);
   }
 
   async saveBookPosition(id: string, position: Position | null): Promise<void> {

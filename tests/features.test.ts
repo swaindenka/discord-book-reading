@@ -306,3 +306,71 @@ describe('dictionary', () => {
     expect(body.oxfordUrl).toContain('q=hello');
   });
 });
+
+describe('book names', () => {
+  const ANNA = "A Man Called Ove A Novel -- Fredrik Backman -- 064e814eedc0c7d1152773539bbe2acd -- Anna's Archive.pdf";
+
+  it('turns download file names into a clean title and author', async () => {
+    server = await startServer();
+    const cookie = await server.login('Owner');
+    // Old clients sent the raw file name as the room name too.
+    const { body } = await server.createRoom(cookie, ANNA.replace('.pdf', '').slice(0, 60), { name: ANNA, data: FAKE_PDF });
+    const socket = await server.connect(cookie);
+    const join = await emit<JoinResult>(socket, 'room:join', { roomId: body.id });
+    expect(join.ok && join.state.name).toBe('A Man Called Ove');
+    expect(join.ok && join.state.books[0]).toMatchObject({ title: 'A Man Called Ove', author: 'Fredrik Backman' });
+    const list = await (await server.fetch('/api/rooms', cookie)).json();
+    expect(list.rooms[0]).toMatchObject({ bookTitle: 'A Man Called Ove', bookAuthor: 'Fredrik Backman' });
+  });
+
+  it('tidies names saved by earlier versions on startup', async () => {
+    const first = await startServer();
+    const cookie = await first.login('Owner');
+    const { body } = await first.createRoom(cookie, 'placeholder', { name: 'x.pdf', data: FAKE_PDF });
+    const raw = ANNA.replace('.pdf', '');
+    await first.db.client.execute({ sql: 'UPDATE rooms SET name = ? WHERE id = ?', args: [raw.slice(0, 60), body.id!] });
+    await first.db.client.execute({ sql: 'UPDATE books SET title = ?, author = NULL', args: [raw] });
+    await first.close({ keepData: true });
+
+    server = await startServer({}, { dir: first.dir });
+    const socket = await server.connect(cookie);
+    const join = await emit<JoinResult>(socket, 'room:join', { roomId: body.id });
+    expect(join.ok && join.state.name).toBe('A Man Called Ove');
+    expect(join.ok && join.state.books[0]).toMatchObject({ title: 'A Man Called Ove', author: 'Fredrik Backman' });
+  });
+
+  it('lets moderators edit a book title and author', async () => {
+    server = await startServer();
+    const ownerCookie = await server.login('Owner');
+    const memberCookie = await server.login('Member');
+    const { body } = await server.createRoom(ownerCookie, 'Club', { name: 'book.pdf', data: FAKE_PDF });
+    const owner = await server.connect(ownerCookie);
+    const member = await server.connect(memberCookie);
+    const join = await emit<JoinResult>(owner, 'room:join', { roomId: body.id });
+    await emit(member, 'room:join', { roomId: body.id });
+    const bookId = join.ok ? join.state.books[0].id : '';
+
+    const update = { type: 'book.update', bookId, title: '  Anxious   People ', author: 'Fredrik Backman' };
+    expect((await emit(member, 'mod:action', update)).ok).toBe(false);
+    expect((await emit(owner, 'mod:action', { ...update, title: '   ' })).ok).toBe(false);
+    const seen = next<RoomState>(member, 'room:state', (s) => s.books[0]?.title === 'Anxious People');
+    expect((await emit(owner, 'mod:action', update)).ok).toBe(true);
+    expect((await seen).books[0].author).toBe('Fredrik Backman');
+    expect((await emit(owner, 'mod:action', { ...update, author: '' })).ok).toBe(true);
+    const again = await emit<JoinResult>(owner, 'room:join', { roomId: body.id });
+    expect(again.ok && again.state.books[0].author).toBeNull();
+  });
+
+  it('validates the suggested turn length', async () => {
+    server = await startServer();
+    const cookie = await server.login('Owner');
+    const { body } = await server.createRoom(cookie, 'Club');
+    const socket = await server.connect(cookie);
+    await emit(socket, 'room:join', { roomId: body.id });
+    expect((await emit(socket, 'mod:action', { type: 'settings', settings: { turnMinutes: 10 } })).ok).toBe(true);
+    expect((await emit(socket, 'mod:action', { type: 'settings', settings: { turnMinutes: -1 } })).ok).toBe(false);
+    expect((await emit(socket, 'mod:action', { type: 'settings', settings: { turnMinutes: 2.5 } })).ok).toBe(false);
+    const join = await emit<JoinResult>(socket, 'room:join', { roomId: body.id });
+    expect(join.ok && join.state.settings.turnMinutes).toBe(10);
+  });
+});

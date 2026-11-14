@@ -906,13 +906,39 @@ select.input {
 }
 .room-card-book {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 8px;
   color: var(--text-soft);
   font-size: 0.88rem;
+  min-width: 0;
+}
+.room-card-book > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 .room-card-book svg {
   flex: none;
+  margin-top: 3px;
+}
+.room-card h3,
+.room-card p,
+.room-card-book,
+.book-row-text,
+.room-title,
+.hl-item-text,
+.reader-card-text {
+  overflow-wrap: anywhere;
+}
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 12px;
+}
+@media (max-width: 520px) {
+  .field-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .live-chip {
   display: inline-flex;
@@ -1246,9 +1272,23 @@ select.input {
 .upload-form {
   gap: 10px;
 }
+.upload-form .field-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+.book-row.editing {
+  display: block;
+}
+.edit-book {
+  gap: 10px;
+}
+.book-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 
 /* ---------- Turn bar ---------- */
 .turn-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1257,6 +1297,26 @@ select.input {
   padding: 10px 14px;
   background: var(--surface);
   border-top: 1px solid var(--border);
+}
+.turn-meter {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--surface-3);
+}
+.turn-meter > div {
+  height: 100%;
+  background: var(--success);
+  transition: width 1s linear;
+}
+.turn-meter.over > div {
+  background: var(--warn);
+}
+.over-time {
+  color: var(--warn);
+  font-weight: 600;
 }
 .turn-bar.my-turn {
   background: linear-gradient(90deg, var(--success-soft), transparent 70%), var(--surface);

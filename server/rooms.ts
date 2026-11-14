@@ -5,6 +5,7 @@ import type { UserCache } from './auth.js';
 import type { BookStorage } from './storage.js';
 import * as turns from './turns.js';
 import {
+  DEFAULT_ROOM_SETTINGS,
   HIGHLIGHT_COLORS,
   HIGHLIGHT_LIMITS,
   LIMITS,
@@ -223,6 +224,7 @@ export class LiveRoom {
       books: this.books.map((b) => ({
         id: b.id,
         title: b.title,
+        author: b.author,
         format: b.format,
         size: b.size,
         uploadedBy: b.uploadedBy,
@@ -244,7 +246,9 @@ export class LiveRoom {
       description: this.record.description,
       ownerName: this.name(this.record.ownerId),
       bookTitle: book?.title ?? null,
+      bookAuthor: book?.author ?? null,
       bookFormat: book?.format ?? null,
+      bookPosition: book?.position ?? null,
       bookCount: this.books.length,
       online: [...this.presence.keys()].slice(0, 8).map((id) => {
         const user = this.ctx.users.peek(id);
@@ -727,6 +731,18 @@ export class LiveRoom {
       case 'member.unban':
         if (!this.banned.delete(targetId)) throw new UserError('That person is not banned.');
         break;
+      case 'book.update': {
+        const book = this.books.find((b) => b.id === action.bookId);
+        if (!book) throw new UserError('Unknown book.');
+        const title = typeof action.title === 'string' ? action.title.replace(/\s+/g, ' ').trim().slice(0, LIMITS.bookTitle) : '';
+        if (!title) throw new UserError('The book needs a title.');
+        const author =
+          typeof action.author === 'string' ? action.author.replace(/\s+/g, ' ').trim().slice(0, LIMITS.bookAuthor) || null : null;
+        book.title = title;
+        book.author = author;
+        await this.ctx.db.updateBookDetails(book.id, title, author);
+        break;
+      }
       case 'book.activate': {
         const book = this.books.find((b) => b.id === action.bookId);
         if (!book) throw new UserError('Unknown book.');
@@ -749,6 +765,13 @@ export class LiveRoom {
     const next = { ...this.settings };
     for (const key of ['rotate', 'queueLocked', 'autoSkipOffline'] as const) {
       if (typeof input[key] === 'boolean') next[key] = input[key];
+    }
+    if (input.turnMinutes !== undefined) {
+      const minutes = Number(input.turnMinutes);
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > 180) {
+        throw new UserError('Turn length must be between 0 (no limit) and 180 minutes.');
+      }
+      next.turnMinutes = minutes;
     }
     if (input.offlineGraceSeconds !== undefined) {
       const seconds = Number(input.offlineGraceSeconds);
@@ -831,7 +854,7 @@ export class RoomManager {
       description,
       ownerId: owner.id,
       activeBookId: null,
-      settings: { rotate: true, queueLocked: false, autoSkipOffline: true, offlineGraceSeconds: 60 },
+      settings: { ...DEFAULT_ROOM_SETTINGS },
       state: { queue: [], reader: null, turnStartedAt: null, moderators: [], banned: [] },
       createdAt: now,
       updatedAt: now,
@@ -863,7 +886,9 @@ export class RoomManager {
         description: row.description,
         ownerName: row.ownerName ?? 'Someone',
         bookTitle: row.bookTitle,
+        bookAuthor: row.bookAuthor,
         bookFormat: row.bookFormat,
+        bookPosition: row.bookPosition,
         bookCount: row.bookCount,
         online: [],
         readerName: null,
