@@ -216,7 +216,7 @@ export interface DictionaryEntry {
   word: string;
   phonetic?: string;
   senses: DictionarySense[];
-  source: 'oxford' | 'free';
+  source: 'oxford' | 'wordnet' | 'wiktionary';
   sourceLabel: string;
 }
 
@@ -233,8 +233,8 @@ export interface AppConfig {
   devLogin: boolean;
   guildRestricted: boolean;
   maxUploadMb: number;
-  /** Which dictionary answers word look-ups, or null when look-ups are off. */
-  dictionary: 'oxford' | 'free' | null;
+  /** Which dictionary answers word look-ups first, or null when look-ups are off. */
+  dictionary: 'oxford' | 'builtin' | null;
 }
 
 export type ModAction =

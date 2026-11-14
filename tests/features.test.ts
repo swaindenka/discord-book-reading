@@ -160,22 +160,26 @@ describe('dictionary', () => {
         res.end(JSON.stringify(body));
       };
       const url = req.url ?? '';
-      // Free Dictionary API format
-      if (url === '/free/lighthouse') {
-        return send(200, [
-          {
-            word: 'lighthouse',
-            phonetics: [{ text: '/ˈlaɪthaʊs/' }],
-            meanings: [
-              {
-                partOfSpeech: 'noun',
-                definitions: [{ definition: 'A tower containing a strong light to guide ships.', example: 'The lighthouse beam swept the bay.' }],
-              },
-            ],
-          },
-        ]);
+      // Wiktionary REST API format
+      if (url === '/wiktionary/frobnicate') {
+        if (!String(req.headers['user-agent']).includes('ReadingRoom')) return send(403, {});
+        return send(200, {
+          en: [
+            {
+              partOfSpeech: 'Verb',
+              language: 'English',
+              definitions: [
+                {
+                  definition: 'To <a href="/wiki/tweak">tweak</a> or adjust, often pointlessly.',
+                  parsedExamples: [{ example: 'He <b>frobnicated</b> the knobs.' }],
+                },
+              ],
+            },
+          ],
+        });
       }
-      if (url.startsWith('/free/')) return send(404, { title: 'No Definitions Found' });
+      if (url === '/wiktionary/glitchword') return send(503, {});
+      if (url.startsWith('/wiktionary/')) return send(404, {});
       // Oxford Dictionaries API format
       if (req.headers.app_id !== 'oxid' || req.headers.app_key !== 'oxkey') return send(403, { error: 'Authentication failed' });
       if (url.startsWith('/oxford/entries/en-gb/run?')) {
@@ -210,63 +214,95 @@ describe('dictionary', () => {
 
   afterAll(() => new Promise<void>((resolve) => fake.close(() => resolve())));
 
-  it('looks words up in the free dictionary, tries base forms and caches answers', async () => {
-    server = await startServer({ dictionary: { provider: 'free', freeApiBase: `${base}/free` } });
+  const define = async (s: TestServer, cookie: string, word: string) => {
+    const res = await s.fetch(`/api/dictionary?word=${encodeURIComponent(word)}`, cookie);
+    return { status: res.status, body: (await res.json()) as DictionaryResult };
+  };
+
+  it('answers from the built-in WordNet dictionary, including inflected forms', async () => {
+    server = await startServer({ dictionary: { mode: 'offline' } });
     const cookie = await server.login('Reader');
-    const config = await (await server.fetch('/api/config', cookie)).json();
-    expect(config.dictionary).toBe('free');
+    expect((await (await server.fetch('/api/config', cookie)).json()).dictionary).toBe('builtin');
 
-    const res = await server.fetch(`/api/dictionary?word=${encodeURIComponent('“Lighthouses,”')}`, cookie);
-    expect(res.status).toBe(200);
-    const result = (await res.json()) as DictionaryResult;
-    expect(result.query).toBe('lighthouses');
-    expect(result.oxfordUrl).toBe('https://www.oxfordlearnersdictionaries.com/search/english/?q=lighthouses');
-    expect(result.entry).toMatchObject({
-      word: 'lighthouse',
-      phonetic: '/ˈlaɪthaʊs/',
-      source: 'free',
-      senses: [{ partOfSpeech: 'noun', definitions: [{ example: 'The lighthouse beam swept the bay.' }] }],
-    });
+    const lighthouse = await define(server, cookie, '“Lighthouses,”');
+    expect(lighthouse.body.query).toBe('lighthouses');
+    expect(lighthouse.body.oxfordUrl).toBe('https://www.oxfordlearnersdictionaries.com/search/english/?q=lighthouses');
+    expect(lighthouse.body.entry).toMatchObject({ word: 'lighthouse', source: 'wordnet', senses: [{ partOfSpeech: 'noun' }] });
+    expect(lighthouse.body.entry!.senses[0].definitions[0].text).toMatch(/tower with a light/);
 
-    const before = calls.length;
-    await server.fetch('/api/dictionary?word=lighthouses', cookie);
-    expect(calls.length).toBe(before); // answered from the cache
+    for (const [form, lemma, pos] of [
+      ['ran', 'run', 'verb'],
+      ['mice', 'mouse', 'noun'],
+      ['freshening', 'freshen', 'verb'],
+      ['look up', 'look up', 'verb'],
+    ]) {
+      const { body } = await define(server, cookie, form);
+      expect(body.entry?.word).toBe(lemma);
+      expect(body.entry?.senses.map((x) => x.partOfSpeech)).toContain(pos);
+    }
 
-    const missing = (await (await server.fetch('/api/dictionary?word=zzxq', cookie)).json()) as DictionaryResult;
-    expect(missing.entry).toBeNull();
-    expect((await server.fetch('/api/dictionary?word=1234', cookie)).status).toBe(400);
-    expect((await server.fetch('/api/dictionary?word=he11o', cookie)).status).toBe(400);
-    expect((await server.fetch('/api/dictionary?word=one two three four five', cookie)).status).toBe(400);
+    expect((await define(server, cookie, 'xyzzyq')).body.entry).toBeNull();
+    expect((await define(server, cookie, '1234')).status).toBe(400);
+    expect((await define(server, cookie, 'he11o')).status).toBe(400);
+    expect((await define(server, cookie, 'one two three four five')).status).toBe(400);
     expect((await fetch(`${server.base}/api/dictionary?word=hello`)).status).toBe(401);
+    expect(calls).toHaveLength(0); // never went online
   });
 
-  it('uses the Oxford Dictionaries API when keys are set, including inflected forms', async () => {
-    server = await startServer({
-      dictionary: {
-        provider: 'oxford',
-        oxfordAppId: 'oxid',
-        oxfordAppKey: 'oxkey',
-        oxfordApiBase: `${base}/oxford`,
-        oxfordLanguage: 'en-gb',
-      },
-    });
+  it('asks Wiktionary for words WordNet lacks, caches the answer and survives outages', async () => {
+    server = await startServer({ dictionary: { mode: 'builtin', wiktionaryApiBase: `${base}/wiktionary` } });
     const cookie = await server.login('Reader');
-    const result = (await (await server.fetch('/api/dictionary?word=Ran', cookie)).json()) as DictionaryResult;
-    expect(result.entry).toMatchObject({
+
+    const rare = await define(server, cookie, 'frobnicate');
+    expect(rare.body.entry).toEqual({
+      word: 'frobnicate',
+      senses: [
+        { partOfSpeech: 'verb', definitions: [{ text: 'To tweak or adjust, often pointlessly.', example: 'He frobnicated the knobs.' }] },
+      ],
+      source: 'wiktionary',
+      sourceLabel: 'Wiktionary',
+    });
+    const before = calls.length;
+    await define(server, cookie, 'frobnicate');
+    expect(calls.length).toBe(before); // cached
+
+    // Common words never need the network.
+    expect((await define(server, cookie, 'breakwater')).body.entry?.source).toBe('wordnet');
+    expect(calls.length).toBe(before);
+
+    // A failing online service doesn't turn into an error for the reader.
+    const outage = await define(server, cookie, 'glitchword');
+    expect(outage.status).toBe(200);
+    expect(outage.body.entry).toBeNull();
+  });
+
+  it('prefers Oxford when keys are set and falls back to WordNet when Oxford fails', async () => {
+    const oxford = { oxfordAppId: 'oxid', oxfordAppKey: 'oxkey', oxfordApiBase: `${base}/oxford`, oxfordLanguage: 'en-gb' };
+    server = await startServer({ dictionary: { mode: 'auto', ...oxford, wiktionaryApiBase: `${base}/wiktionary` } });
+    let cookie = await server.login('Reader');
+    expect((await (await server.fetch('/api/config', cookie)).json()).dictionary).toBe('oxford');
+    const ran = await define(server, cookie, 'Ran');
+    expect(ran.body.entry).toMatchObject({
       word: 'run',
       phonetic: '/rʌn/',
       source: 'oxford',
-      sourceLabel: 'Oxford Dictionaries',
       senses: [{ partOfSpeech: 'verb', definitions: [{ text: 'move at a speed faster than a walk' }] }],
     });
     expect(calls.some((c) => c.startsWith('oxid /oxford/lemmas/en-gb/ran'))).toBe(true);
+    await server.close();
+
+    // Wrong keys: Oxford answers 403, the built-in dictionary takes over.
+    server = await startServer({ dictionary: { mode: 'auto', ...oxford, oxfordAppKey: 'wrong', wiktionaryApiBase: `${base}/wiktionary` } });
+    cookie = await server.login('Reader');
+    expect((await define(server, cookie, 'lighthouse')).body.entry?.source).toBe('wordnet');
   });
 
   it('reports when look-ups are switched off', async () => {
-    server = await startServer({ dictionary: { provider: null } });
+    server = await startServer({ dictionary: { mode: 'off' } });
     const cookie = await server.login('Reader');
-    const result = (await (await server.fetch('/api/dictionary?word=hello', cookie)).json()) as DictionaryResult;
-    expect(result.entry).toBeNull();
-    expect(result.oxfordUrl).toContain('q=hello');
+    expect((await (await server.fetch('/api/config', cookie)).json()).dictionary).toBeNull();
+    const { body } = await define(server, cookie, 'hello');
+    expect(body.entry).toBeNull();
+    expect(body.oxfordUrl).toContain('q=hello');
   });
 });

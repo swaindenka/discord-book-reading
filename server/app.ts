@@ -71,6 +71,7 @@ export function createApp({ config, db, storage }: AppDeps): App {
 
   const users = new UserCache(db, config.adminUserIds);
   const dictionary = new Dictionary(config.dictionary, db);
+  dictionary.warmUp();
   const auth = new Auth(config, users);
   const http = createServer(app);
   const io: IO = new Server(http, {

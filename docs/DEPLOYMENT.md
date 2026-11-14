@@ -168,11 +168,15 @@ docker run --rm -v discord-book-reading_app-data:/data -v "$PWD":/backup busybox
 
 ---
 
-## Word definitions (optional Oxford keys)
+## Word definitions
 
-Selecting a word in a book shows its meaning. Out of the box this uses the free, Wiktionary-based [Free Dictionary API](https://dictionaryapi.dev), and every pop-up links to the word on the free Oxford Learner's Dictionary website.
+Selecting a word in a book shows its meaning. It works out of the box with no setup:
 
-To show Oxford's own definitions, sign up for the [Oxford Dictionaries API](https://developer.oxforddictionaries.com) and set `OXFORD_APP_ID` and `OXFORD_APP_KEY`. Oxford's API is a paid service with a limited free trial. Answers are cached in the database for 30 days, so each word only uses your quota once.
+1. **Built-in WordNet** (Princeton, about 155,000 English words and phrases) ships with the app. It answers instantly, needs no internet access, and resolves inflected forms ("ran" → run, "mice" → mouse).
+2. **Wiktionary** (Wikimedia's official API) is asked only for words WordNet doesn't know. Answers are cached for 30 days.
+3. Every pop-up also links to the word on the free **Oxford Learner's Dictionary** website.
+
+To show Oxford's own definitions first, sign up for the [Oxford Dictionaries API](https://developer.oxforddictionaries.com) and set `OXFORD_APP_ID` and `OXFORD_APP_KEY`. Oxford's API is paid, with a limited free trial. Answers are cached, so each word only uses your quota once. If Oxford fails (wrong key, quota used up), the built-in dictionary answers instead.
 
 ## Other options
 
@@ -186,7 +190,7 @@ To show Oxford's own definitions, sign up for the [Oxford Dictionaries API](http
 | Discord says `Invalid OAuth2 redirect_uri` | The redirect in the Discord portal must match the one printed in the server log exactly: `https`, no trailing slash. |
 | "You need to be a member of our Discord community" | `DISCORD_GUILD_IDS` is set and the person isn't in any of those servers. Empty it to let anyone in. |
 | No "Site admins" item in the account menu | Your Discord user ID isn't in `ADMIN_USER_IDS`. Add it, redeploy, and reload the page. |
-| Word definitions say the dictionary isn't answering | The free dictionary may be down. Set Oxford API keys, or `DICTIONARY_PROVIDER=off`. The Oxford Learner's link still works. |
+| A word has no definition | It's in neither WordNet nor Wiktionary (often names or rare spellings). The Oxford Learner's link still works. |
 | Everyone is signed out after a restart | Set a fixed `SESSION_SECRET`. |
 | Books or rooms disappear on Render | `DATABASE_URL` isn't set, so the app fell back to Render's temporary disk. |
 | The site stays on "Joining room…" | The proxy in front of the app must allow WebSocket upgrades. Render and the bundled Caddy setup already do. |

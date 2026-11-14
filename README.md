@@ -8,7 +8,7 @@ Read books together with your Discord server. Instead of one person screen-shari
 - **Synced pages** – whoever is reading turns the pages (and scrolls) for everyone. Their mouse pointer shows up on PDF and comic pages, and text they select in an EPUB is highlighted for everyone, much like a screen share. Anyone can browse ahead and jump back to the reader with one click.
 - **Discord sign-in** – one queue spot per Discord account, so opening more browsers or tabs doesn't get anyone extra turns. Anyone with a Discord account can join, or you can limit sign-in to members of one or more Discord servers.
 - **Highlights** – moderators and admins can switch on the highlighter and mark text (or, on scanned PDF and comic pages, an area) in four colours. Everyone sees the highlights live, and they stay with the book. The highlights list jumps straight to each one.
-- **Dictionary** – select a word to see its meaning, with a link to the Oxford Learner's Dictionary. With Oxford Dictionaries API keys, definitions come from Oxford; otherwise from a free Wiktionary-based dictionary.
+- **Dictionary** – select a word to see its meaning, with a link to the Oxford Learner's Dictionary. Definitions come from a built-in copy of Princeton WordNet (about 155,000 words, works offline and understands forms like "ran" or "mice"). Wiktionary fills in rare words, and Oxford Dictionaries is used first if you add API keys.
 - **Site admins by Discord ID** – the IDs in `ADMIN_USER_IDS` are admins in every room. They can add more admins by Discord user ID from the site.
 - **Reading queue** – join the line, **Finish** your turn or **Pass** it on. Readers can go back to the end of the line automatically, and a reader who disconnects is skipped after a grace period.
 - **Moderation** – the person who creates the room (and uploads the book) is its owner. Owners and moderators can reorder the queue (drag and drop), hand the turn to someone, skip or pause the reader, lock or shuffle the queue, add moderators, kick or ban people, and manage the room's library.
@@ -68,7 +68,7 @@ All settings are environment variables. `.env.example` has the full list with co
 | `ADMIN_USER_IDS` | Discord user IDs of root site admins (owner rights everywhere, can add more admins) |
 | `DISCORD_GUILD_IDS` | Optional: only members of these Discord servers can sign in (empty = anyone) |
 | `DISCORD_ADMIN_ROLE_IDS` | Optional: roles in those servers that make someone a site admin |
-| `DICTIONARY_PROVIDER`, `OXFORD_APP_ID`, `OXFORD_APP_KEY` | Word look-ups: Oxford Dictionaries with keys, otherwise a free dictionary (`off` disables) |
+| `DICTIONARY_PROVIDER`, `OXFORD_APP_ID`, `OXFORD_APP_KEY` | Word look-ups: built-in WordNet + Wiktionary, Oxford first with keys (`offline` or `off` also possible) |
 | `DATABASE_URL`, `DATABASE_AUTH_TOKEN` | SQLite file (default) or a remote libSQL/Turso database |
 | `STORAGE_DRIVER` | Where book files are kept: `local` disk or the `database` (`auto` picks the database when it is remote) |
 | `MAX_UPLOAD_MB`, `MAX_ROOMS_PER_USER`, `MAX_BOOKS_PER_ROOM` | Limits |
@@ -92,7 +92,8 @@ server/   Express + Socket.IO backend
   rooms.ts      live room state: presence, queue, moderation, chat
   turns.ts      pure queue/turn logic (unit tested)
   api.ts        REST endpoints: rooms, uploads, book files, dictionary, site admins
-  dictionary.ts Oxford Dictionaries / free dictionary look-ups with a database cache
+  dictionary.ts word look-ups: Oxford (optional) → built-in WordNet → Wiktionary, cached
+  wordnet.ts    offline WordNet 3.1 reader with lemmatisation
   storage.ts    book files on disk or chunked into the database
   db.ts         libSQL / SQLite schema and queries
 client/   React app (Vite)
@@ -121,4 +122,4 @@ The server stores one position per book: a page number plus the scroll point for
 
 ## License
 
-MIT
+MIT. The bundled dictionary data is [WordNet 3.1](https://wordnet.princeton.edu/) © Princeton University, used under the WordNet licence.
