@@ -101,20 +101,22 @@ export const config = {
   clientDir: path.resolve(env('CLIENT_DIR') ?? 'dist/client'),
 
   dictionary: {
-    /** auto: Oxford when keys are set, otherwise the free Wiktionary-based API. off: disabled. */
-    provider: (() => {
+    /**
+     * auto: Oxford Dictionaries first when keys are set, then the built-in WordNet dictionary,
+     * then Wiktionary for rare words. "builtin" skips Oxford, "offline" uses WordNet only,
+     * "off" disables look-ups.
+     */
+    mode: (() => {
       const value = (env('DICTIONARY_PROVIDER') ?? 'auto').toLowerCase();
-      const hasOxford = Boolean(env('OXFORD_APP_ID') && env('OXFORD_APP_KEY'));
-      if (value === 'off') return null;
-      if (value === 'free') return 'free' as const;
-      if (value === 'oxford') return hasOxford ? ('oxford' as const) : null;
-      return hasOxford ? ('oxford' as const) : ('free' as const);
-    })(),
+      if (value === 'off' || value === 'offline' || value === 'builtin') return value;
+      if (value === 'free' || value === 'wordnet' || value === 'wiktionary') return 'builtin' as const;
+      return 'auto' as const;
+    })() as 'auto' | 'builtin' | 'offline' | 'off',
     oxfordAppId: env('OXFORD_APP_ID') ?? '',
     oxfordAppKey: env('OXFORD_APP_KEY') ?? '',
     oxfordApiBase: (env('OXFORD_API_BASE') ?? 'https://od-api.oxforddictionaries.com/api/v2').replace(/\/+$/, ''),
     oxfordLanguage: env('OXFORD_LANGUAGE') ?? 'en-gb',
-    freeApiBase: (env('FREE_DICTIONARY_API_BASE') ?? 'https://api.dictionaryapi.dev/api/v2/entries/en').replace(/\/+$/, ''),
+    wiktionaryApiBase: (env('WIKTIONARY_API_BASE') ?? 'https://en.wiktionary.org/api/rest_v1/page/definition').replace(/\/+$/, ''),
   },
 };
 

@@ -109,7 +109,7 @@ export function SettingsPanel({
             checked={personal.dictionary}
             onChange={(v) => updatePersonal({ dictionary: v })}
             label="Define words I select"
-            hint={`Select a word in the book to see its meaning (${config.dictionary === 'oxford' ? 'Oxford Dictionaries' : 'free dictionary'}, with a link to Oxford).`}
+            hint={`Select a word in the book to see its meaning (${config.dictionary === 'oxford' ? 'Oxford Dictionaries' : 'built-in English dictionary'}, with a link to Oxford).`}
           />
         )}
         <Toggle checked={personal.sound} onChange={(v) => updatePersonal({ sound: v })} label="Play a sound when it's my turn" />

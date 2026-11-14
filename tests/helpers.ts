@@ -32,7 +32,7 @@ export async function startServer(overrides: Overrides = {}, existing?: { dir: s
     storageDriver: 'local',
     ...overrides,
     discord: { ...baseConfig.discord, enabled: false, guildIds: [], adminRoleIds: [], ...overrides.discord },
-    dictionary: { ...baseConfig.dictionary, provider: null, ...overrides.dictionary },
+    dictionary: { ...baseConfig.dictionary, mode: 'off', ...overrides.dictionary },
   } as Config;
   const db = await Database.open(`file:${path.join(dir, 'test.db')}`);
   const storage =

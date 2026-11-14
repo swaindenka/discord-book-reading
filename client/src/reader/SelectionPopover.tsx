@@ -137,7 +137,7 @@ export function SelectionPopover({
           <div className="dict-body">
             {lookup.status === 'loading' && <p className="muted small">Looking it up…</p>}
             {lookup.status === 'error' && <p className="muted small">{lookup.message}</p>}
-            {lookup.status === 'done' && !entry && <p className="muted small">No definition found in the built-in dictionary.</p>}
+            {lookup.status === 'done' && !entry && <p className="muted small">No definition found. Try the Oxford link below.</p>}
             {entry?.senses.map((sense, i) => (
               <div key={i} className="dict-sense">
                 {sense.partOfSpeech && <em className="dict-pos">{sense.partOfSpeech}</em>}
