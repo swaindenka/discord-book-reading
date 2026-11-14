@@ -27,10 +27,12 @@ import type {
   ReaderProps,
   ReaderTarget,
   SelectionInfo,
+  SelectionRect,
 } from './types';
 import { defaultPrefs } from './types';
 import { HighlighterToggle, HighlightsMenu } from './HighlightTools';
 import { SelectionPopover } from './SelectionPopover';
+import { HighlightActions } from './HighlightActions';
 
 type ReaderComponent = ComponentType<ReaderProps & RefAttributes<ReaderHandle>>;
 
@@ -122,6 +124,8 @@ export function BookViewer({
   const handle = useRef<ReaderHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
+  const [clicked, setClicked] = useState<{ id: string; rect: SelectionRect } | null>(null);
+  const closeClicked = useCallback(() => setClicked(null), []);
   const [highlighter, setHighlighter] = useState(false);
   const [hlPrefs, setHlPrefs] = useState(() => loadPref('highlights', { color: 'yellow' as HighlightColor, show: true }));
   const updateHlPrefs = (patch: Partial<typeof hlPrefs>) =>
@@ -160,8 +164,14 @@ export function BookViewer({
       drawing,
       color: hlPrefs.color,
       create: (anchor, text, label) => latest.current.add(latest.current.color, anchor, text, label),
+      onClick: highlights.canEdit
+        ? (id, rect) => {
+            setSelection(null);
+            setClicked({ id, rect });
+          }
+        : undefined,
     }),
-    [hlPrefs.show, hlPrefs.color, highlights.items, drawing],
+    [hlPrefs.show, hlPrefs.color, highlights.items, highlights.canEdit, drawing],
   );
 
   useEffect(() => {
@@ -418,7 +428,22 @@ export function BookViewer({
             />
           </Suspense>
         )}
-        {selection && !drawing && (
+        {clicked &&
+          (() => {
+            const highlight = highlights.items.find((h) => h.id === clicked.id);
+            return highlight ? (
+              <HighlightActions
+                highlight={highlight}
+                rect={clicked.rect}
+                onClose={closeClicked}
+                onRemove={() => {
+                  highlights.remove(highlight.id);
+                  setClicked(null);
+                }}
+              />
+            ) : null;
+          })()}
+        {selection && !drawing && !clicked && (
           <SelectionPopover
             info={selection}
             canHighlight={highlights.canEdit}

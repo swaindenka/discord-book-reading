@@ -98,6 +98,8 @@ export interface HighlightProps {
   drawing: boolean;
   color: HighlightColor;
   create(anchor: HighlightAnchor, text: string, label: string): void;
+  /** Moderators only: a saved highlight was clicked (opens its remove menu). */
+  onClick?(id: string, rect: SelectionRect): void;
 }
 
 export interface ReaderProps {

@@ -53,8 +53,8 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
   /** Saved highlights currently drawn: id -> CFI range. */
   const drawn = useRef(new Map<string, string>());
 
-  const latest = useRef({ target, onNavigate, onMeta, onSelection, cues, toc });
-  latest.current = { target, onNavigate, onMeta, onSelection, cues, toc };
+  const latest = useRef({ target, onNavigate, onMeta, onSelection, cues, toc, onHighlightClick: highlights.onClick });
+  latest.current = { target, onNavigate, onMeta, onSelection, cues, toc, onHighlightClick: highlights.onClick };
 
   const chapterFor = (href: string) => {
     const name = baseName(href);
@@ -173,6 +173,25 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
         }
       }, 300);
     };
+    // Clicking inside a saved highlight opens its menu. Hit-test against the highlight's text
+    // ourselves: the overlay's own click handling misses in paginated mode.
+    rendition.on('click', (e: MouseEvent) => {
+      const onClick = latest.current.onHighlightClick;
+      const doc = (e.target as Node | null)?.ownerDocument;
+      if (!onClick || !doc || !doc.getSelection()?.isCollapsed) return;
+      for (const [id, cfiRange] of [...drawn.current].reverse()) {
+        const range = rendition.getRange(cfiRange) as Range | null;
+        if (!range) continue;
+        const hit = Array.from(range.getClientRects()).some(
+          // A little slack: glyph boxes are shorter than the line they sit on.
+          (r) => e.clientX >= r.left - 2 && e.clientX <= r.right + 2 && e.clientY >= r.top - 5 && e.clientY <= r.bottom + 5,
+        );
+        if (!hit) continue;
+        const frame = (doc.defaultView?.frameElement as HTMLElement | null)?.getBoundingClientRect();
+        onClick(id, rectOf(range, { x: frame?.left ?? 0, y: frame?.top ?? 0 }));
+        return;
+      }
+    });
     rendition.on('mousedown', press);
     rendition.on('touchstart', press);
     rendition.on('mouseup', release);

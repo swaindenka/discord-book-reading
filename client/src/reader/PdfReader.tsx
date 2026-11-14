@@ -176,6 +176,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
         className={cx('pdf-page', !pageSize && 'hidden')}
         style={pageSize ? { width: pageSize.width, height: pageSize.height } : undefined}
         highlights={pageBoxes(highlights.items, page)}
+        onHighlightClick={highlights.onClick}
         draw={{
           enabled: highlights.drawing,
           color: highlights.color,
