@@ -7,7 +7,8 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import { clamp, colorFor, throttle } from '../util';
+import { HIGHLIGHT_COLORS, type HighlightColor } from '../../../shared/types';
+import { clamp, colorFor, cx, throttle } from '../util';
 import type { CueProps, NavigateEvent, ReaderTarget } from './types';
 import { positionKey, roundScroll } from './types';
 
@@ -85,14 +86,16 @@ export function usePagedSync({
     [applyPendingScroll],
   );
 
+  /** Goes to a page; `scroll` (0–1) centres that point of the page, otherwise the top is shown. */
   const goToPage = useCallback(
-    (requested: number) => {
+    (requested: number, scroll?: number) => {
       if (!pageCount) return;
       const next = clamp(Math.round(requested), 1, pageCount);
-      if (next === pageRef.current) return;
-      const position = { kind: 'page' as const, page: next };
+      if (next === pageRef.current && scroll === undefined) return;
+      const position =
+        scroll === undefined ? { kind: 'page' as const, page: next } : { kind: 'page' as const, page: next, scroll: roundScroll(scroll) };
       lastKey.current = `${versionRef.current}|${positionKey(position)}`;
-      showPage(next, TOP);
+      showPage(next, position.scroll ?? TOP);
       navigateRef.current({ position, scrollOnly: false });
     },
     [pageCount, showPage],
@@ -145,9 +148,26 @@ export function useElementSize(ref: RefObject<HTMLElement | null>) {
   return size;
 }
 
+type Box = [number, number, number, number];
+
+export interface PageHighlight {
+  id: string;
+  color: HighlightColor;
+  rects: Box[];
+}
+
+export interface AreaDraw {
+  enabled: boolean;
+  color: HighlightColor;
+  /** Whether a drag starting on this element should draw (PDF text should stay selectable). */
+  canStart?(target: EventTarget | null): boolean;
+  onDone(box: Box): void;
+}
+
 /**
- * Wraps a page so the current reader's mouse pointer is shown to everyone following,
- * like the cursor on a screen share.
+ * Wraps a page (PDF or comic). It shows the current reader's mouse pointer to everyone
+ * following, like the cursor on a screen share, draws saved highlights, and lets
+ * moderators drag out an area highlight while the highlighter is on.
  */
 export function PointerSurface({
   page,
@@ -156,6 +176,9 @@ export function PointerSurface({
   className,
   children,
   style,
+  highlights = [],
+  draw,
+  surfaceRef,
 }: {
   page: number;
   cues: CueProps;
@@ -163,12 +186,17 @@ export function PointerSurface({
   className?: string;
   children: ReactNode;
   style?: React.CSSProperties;
+  highlights?: PageHighlight[];
+  draw?: AreaDraw;
+  surfaceRef?: RefObject<HTMLDivElement | null>;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const ownRef = useRef<HTMLDivElement>(null);
+  const ref = surfaceRef ?? ownRef;
   const send = useRef(throttle((p: number, x: number | null, y: number | null) => cues.sendPointer(p, x, y), 50)).current;
   const sendRef = useRef(cues.sendPointer);
   sendRef.current = cues.sendPointer;
   const [visible, setVisible] = useState(false);
+  const [drag, setDrag] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const pointer = cues.pointer;
   const showRemote = pointer && pointer.bookId === bookId && pointer.page === page && pointer.x !== null && pointer.y !== null;
 
@@ -184,21 +212,86 @@ export function PointerSurface({
     return () => clearTimeout(timer);
   }, [pointer, showRemote]);
 
-  const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!cues.canSend || e.pointerType === 'touch') return;
+  const relative = (e: ReactPointerEvent) => {
     const rect = ref.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return;
-    send(page, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+    if (!rect || rect.width === 0) return null;
+    return {
+      x: clamp((e.clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((e.clientY - rect.top) / rect.height, 0, 1),
+    };
   };
+
+  const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draw?.enabled || e.button !== 0) return;
+    if (draw.canStart && !draw.canStart(e.target)) return;
+    const point = relative(e);
+    if (!point) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrag({ x0: point.x, y0: point.y, x1: point.x, y1: point.y });
+  };
+
+  const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (drag) {
+      const point = relative(e);
+      if (point) setDrag({ ...drag, x1: point.x, y1: point.y });
+    }
+    if (!cues.canSend || e.pointerType === 'touch') return;
+    const point = relative(e);
+    if (point) send(page, point.x, point.y);
+  };
+
+  const onUp = () => {
+    if (!drag || !draw) return;
+    const box: Box = [
+      Math.min(drag.x0, drag.x1),
+      Math.min(drag.y0, drag.y1),
+      Math.abs(drag.x1 - drag.x0),
+      Math.abs(drag.y1 - drag.y0),
+    ];
+    setDrag(null);
+    if (box[2] > 0.01 && box[3] > 0.005) draw.onDone(box.map((n) => Math.round(n * 10000) / 10000) as Box);
+  };
+
   const onLeave = () => {
     if (!cues.canSend) return;
     send.cancel();
     sendRef.current(page, null, null);
   };
 
+  const box = (b: Box) => ({ left: `${b[0] * 100}%`, top: `${b[1] * 100}%`, width: `${b[2] * 100}%`, height: `${b[3] * 100}%` });
+
   return (
-    <div ref={ref} className={className} style={style} onPointerMove={onMove} onPointerLeave={onLeave}>
+    <div
+      ref={ref}
+      className={cx(className, draw?.enabled && 'drawing')}
+      style={style}
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={() => setDrag(null)}
+      onPointerLeave={onLeave}
+    >
       {children}
+      {highlights.length > 0 && (
+        <div className="hl-layer" aria-hidden>
+          {highlights.flatMap((h) =>
+            h.rects.map((r, i) => (
+              <div key={`${h.id}-${i}`} className="hl-box" style={{ ...box(r), background: HIGHLIGHT_COLORS[h.color].css }} />
+            )),
+          )}
+        </div>
+      )}
+      {drag && draw && (
+        <div
+          className="hl-draft"
+          style={{
+            ...box([Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1), Math.abs(drag.x1 - drag.x0), Math.abs(drag.y1 - drag.y0)]),
+            borderColor: HIGHLIGHT_COLORS[draw.color].css,
+            background: HIGHLIGHT_COLORS[draw.color].css,
+          }}
+        />
+      )}
       {showRemote && (
         <div
           className={`remote-pointer ${visible ? 'visible' : ''}`}
@@ -211,4 +304,14 @@ export function PointerSurface({
       )}
     </div>
   );
+}
+
+/** Highlights that sit on `page` as boxes (PDF and comics). */
+export function pageBoxes(items: { id: string; color: HighlightColor; anchor: { kind: string } }[], page: number): PageHighlight[] {
+  const out: PageHighlight[] = [];
+  for (const h of items) {
+    const anchor = h.anchor as { kind: string; page?: number; rects?: Box[] };
+    if (anchor.kind === 'rects' && anchor.page === page && anchor.rects) out.push({ id: h.id, color: h.color, rects: anchor.rects });
+  }
+  return out;
 }

@@ -17,7 +17,7 @@ import type { Position } from '../../../shared/types';
 import { UserMenu } from '../components/AppHeader';
 import { Spinner } from '../components/ui';
 import { useToast } from '../components/Toasts';
-import { BookViewer } from '../reader/BookViewer';
+import { BookViewer, type ViewerHighlights } from '../reader/BookViewer';
 import type { CueProps, NavigateEvent, ReaderTarget } from '../reader/types';
 import { ChatPanel } from '../room/ChatPanel';
 import { LibraryPanel } from '../room/LibraryPanel';
@@ -151,14 +151,27 @@ export function RoomPage({ roomId }: { roomId: string }) {
     toast.show('Everyone is now on your page.', 'success');
   };
 
+  const isMod = Boolean(view?.isMod);
+  const viewerHighlights = useMemo<ViewerHighlights>(
+    () => ({
+      items: room.highlights,
+      canEdit: isMod,
+      add: (color, anchor, text, label) => {
+        if (activeBook) void room.actions.addHighlight(activeBook.id, color, anchor, text, label);
+      },
+      remove: (id) => void room.actions.removeHighlight(id),
+    }),
+    [room.highlights, room.actions, isMod, activeBook],
+  );
+
   const cues: CueProps = useMemo(
     () => ({
       canSend: controller,
       pointer: room.pointer,
-      highlight: room.highlight,
+      selection: room.selection,
       pointerName: state?.reader?.name ?? 'Moderator',
       sendPointer: (page, x, y) => activeBook && room.sendPointer(activeBook.id, page, x, y),
-      sendHighlight: (cfiRange) => activeBook && room.sendHighlight(activeBook.id, cfiRange),
+      sendSelection: (cfiRange) => activeBook && room.sendSelection(activeBook.id, cfiRange),
     }),
     [controller, room, state?.reader?.name, activeBook],
   );
@@ -241,7 +254,16 @@ export function RoomPage({ roomId }: { roomId: string }) {
       <div className={cx('room-body', sidebarOpen && 'sidebar-open')}>
         <main className="room-main">
           {activeBook ? (
-            <BookViewer key={activeBook.id} book={activeBook} target={target} onNavigate={onNavigate} cues={cues} status={status} />
+            <BookViewer
+              key={activeBook.id}
+              book={activeBook}
+              target={target}
+              onNavigate={onNavigate}
+              cues={cues}
+              status={status}
+              highlights={viewerHighlights}
+              dictionary={Boolean(config.dictionary) && personal.dictionary}
+            />
           ) : (
             <div className="viewer-message">
               <LibraryBig size={40} aria-hidden />

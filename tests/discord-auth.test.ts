@@ -4,24 +4,29 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { cookieHeader, startServer, type TestServer } from './helpers.js';
 
 const GUILD = '111111111111111111';
+const OTHER_GUILD = '444444444444444444';
 const MOD_ROLE = '222222222222222222';
 
 /** A stand-in for the few Discord API endpoints the OAuth flow uses. */
 let discord: Server;
 let discordBase = '';
 const revoked: string[] = [];
-const users: Record<string, { user: object; member: object | null }> = {
+const users: Record<string, { user: object; members: Record<string, object> }> = {
   'code-member': {
     user: { id: '80351110224678912', username: 'nelly', global_name: 'Nelly', avatar: 'abc123' },
-    member: { nick: 'Nelly the Reader', roles: ['333'], avatar: null },
+    members: { [GUILD]: { nick: 'Nelly the Reader', roles: ['333'], avatar: null } },
   },
   'code-mod': {
     user: { id: '80351110224678913', username: 'modkat', global_name: null, avatar: null },
-    member: { nick: null, roles: [MOD_ROLE], avatar: 'guildav' },
+    members: { [GUILD]: { nick: null, roles: [MOD_ROLE], avatar: 'guildav' } },
+  },
+  'code-other-server': {
+    user: { id: '80351110224678915', username: 'visitor', global_name: 'Visitor', avatar: null },
+    members: { [OTHER_GUILD]: { nick: 'Guest Reader', roles: [], avatar: null } },
   },
   'code-outsider': {
     user: { id: '80351110224678914', username: 'stranger', global_name: 'Stranger', avatar: null },
-    member: null,
+    members: {},
   },
 };
 
@@ -48,8 +53,10 @@ beforeAll(async () => {
       const entry = users[token.replace('token-', '')];
       if (!entry) return json(401, { message: '401: Unauthorized' });
       if (req.url === '/users/@me') return json(200, entry.user);
-      if (req.url === `/users/@me/guilds/${GUILD}/member`) {
-        return entry.member ? json(200, entry.member) : json(404, { message: 'Unknown Guild', code: 10004 });
+      const memberMatch = req.url?.match(/^\/users\/@me\/guilds\/(\d+)\/member$/);
+      if (memberMatch) {
+        const member = entry.members[memberMatch[1]];
+        return member ? json(200, member) : json(404, { message: 'Unknown Guild', code: 10004 });
       }
       json(404, {});
     });
@@ -66,16 +73,17 @@ afterEach(async () => {
   server = null;
 });
 
-async function start() {
+async function start(guildIds: string[] = [GUILD], adminUserIds: string[] = []) {
   server = await startServer({
     devLogin: false,
     publicUrl: 'http://reading.test',
+    adminUserIds,
     discord: {
       enabled: true,
       clientId: 'client',
       clientSecret: 'secret',
       redirectUri: 'http://reading.test/auth/discord/callback',
-      guildId: GUILD,
+      guildIds,
       adminRoleIds: [MOD_ROLE],
       apiBase: discordBase,
     },
@@ -84,12 +92,12 @@ async function start() {
 }
 
 /** Runs the OAuth dance and returns the final redirect plus session cookie. */
-async function signIn(s: TestServer, code: string, opts: { tamperState?: boolean } = {}) {
+async function signIn(s: TestServer, code: string, opts: { tamperState?: boolean; scope?: string } = {}) {
   const start = await fetch(`${s.base}/auth/discord?returnTo=${encodeURIComponent('/room/abcd1234')}`, { redirect: 'manual' });
   expect(start.status).toBe(302);
   const authorize = new URL(start.headers.get('location')!);
   expect(authorize.origin).toBe('https://discord.com');
-  expect(authorize.searchParams.get('scope')).toBe('identify guilds.members.read');
+  expect(authorize.searchParams.get('scope')).toBe(opts.scope ?? 'identify guilds.members.read');
   expect(authorize.searchParams.get('redirect_uri')).toBe('http://reading.test/auth/discord/callback');
   const state = opts.tamperState ? 'forged' : authorize.searchParams.get('state')!;
   const callback = await fetch(`${s.base}/auth/discord/callback?code=${code}&state=${state}`, {
@@ -141,6 +149,29 @@ describe('Discord sign-in', () => {
     const s = await start();
     const { location } = await signIn(s, 'code-unknown');
     expect(location).toBe('/login?error=oauth_failed');
+  });
+
+  it('lets anyone with a Discord account in when no server list is set', async () => {
+    const s = await start([]);
+    const { location, cookie } = await signIn(s, 'code-outsider', { scope: 'identify' });
+    expect(location).toBe('/room/abcd1234');
+    const me = await (await s.fetch('/api/me', cookie)).json();
+    expect(me.user).toMatchObject({ name: 'Stranger', isAdmin: false, isRootAdmin: false });
+  });
+
+  it('accepts members of any server in the allow-list', async () => {
+    const s = await start([GUILD, OTHER_GUILD]);
+    const { location, cookie } = await signIn(s, 'code-other-server');
+    expect(location).toBe('/room/abcd1234');
+    const me = await (await s.fetch('/api/me', cookie)).json();
+    expect(me.user.name).toBe('Guest Reader');
+  });
+
+  it('makes people listed by user ID root site admins', async () => {
+    const s = await start([], ['80351110224678914']);
+    const { cookie } = await signIn(s, 'code-outsider', { scope: 'identify' });
+    const me = await (await s.fetch('/api/me', cookie)).json();
+    expect(me.user).toMatchObject({ isAdmin: true, isRootAdmin: true });
   });
 
   it('disables developer login when Discord is configured', async () => {

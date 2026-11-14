@@ -21,9 +21,15 @@ services:
         sync: false
       - key: DISCORD_CLIENT_SECRET
         sync: false
-      - key: DISCORD_GUILD_ID
+      - key: ADMIN_USER_IDS
+        sync: false
+      - key: DISCORD_GUILD_IDS
         sync: false
       - key: DISCORD_ADMIN_ROLE_IDS
+        sync: false
+      - key: OXFORD_APP_ID
+        sync: false
+      - key: OXFORD_APP_KEY
         sync: false
       - key: DATABASE_URL
         sync: false

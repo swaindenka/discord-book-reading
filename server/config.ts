@@ -74,12 +74,16 @@ export const config = {
     clientId: discordClientId ?? '',
     clientSecret: discordClientSecret ?? '',
     redirectUri: `${publicUrl}/auth/discord/callback`,
-    /** When set, only members of this Discord server may sign in. */
-    guildId: env('DISCORD_GUILD_ID') ?? null,
-    /** Members with one of these roles (in DISCORD_GUILD_ID) are site-wide admins. */
+    /**
+     * Optional allow-list of Discord servers. Empty (the default) lets anyone with a Discord
+     * account sign in; otherwise people must be a member of at least one of these servers.
+     */
+    guildIds: [...new Set([...list('DISCORD_GUILD_IDS'), ...list('DISCORD_GUILD_ID')])],
+    /** Members holding one of these roles in an allowed server are site-wide admins. */
     adminRoleIds: list('DISCORD_ADMIN_ROLE_IDS'),
     apiBase: env('DISCORD_API_BASE') ?? 'https://discord.com/api/v10',
   },
+  /** Discord user IDs that are always site admins and can add more admins in the app. */
   adminUserIds: list('ADMIN_USER_IDS'),
   /** Username-only login for local development and demos. Never enable this on a public site. */
   devLogin: bool('DEV_LOGIN', !isProduction && !discordLogin),
@@ -95,6 +99,23 @@ export const config = {
   maxRoomsPerUser: int('MAX_ROOMS_PER_USER', 10),
   maxBooksPerRoom: int('MAX_BOOKS_PER_ROOM', 25),
   clientDir: path.resolve(env('CLIENT_DIR') ?? 'dist/client'),
+
+  dictionary: {
+    /** auto: Oxford when keys are set, otherwise the free Wiktionary-based API. off: disabled. */
+    provider: (() => {
+      const value = (env('DICTIONARY_PROVIDER') ?? 'auto').toLowerCase();
+      const hasOxford = Boolean(env('OXFORD_APP_ID') && env('OXFORD_APP_KEY'));
+      if (value === 'off') return null;
+      if (value === 'free') return 'free' as const;
+      if (value === 'oxford') return hasOxford ? ('oxford' as const) : null;
+      return hasOxford ? ('oxford' as const) : ('free' as const);
+    })(),
+    oxfordAppId: env('OXFORD_APP_ID') ?? '',
+    oxfordAppKey: env('OXFORD_APP_KEY') ?? '',
+    oxfordApiBase: (env('OXFORD_API_BASE') ?? 'https://od-api.oxforddictionaries.com/api/v2').replace(/\/+$/, ''),
+    oxfordLanguage: env('OXFORD_LANGUAGE') ?? 'en-gb',
+    freeApiBase: (env('FREE_DICTIONARY_API_BASE') ?? 'https://api.dictionaryapi.dev/api/v2/entries/en').replace(/\/+$/, ''),
+  },
 };
 
 export type Config = typeof config;

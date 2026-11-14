@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode, type RefAttributes } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type RefAttributes } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,12 +12,25 @@ import {
   Maximize,
   Coffee,
 } from 'lucide-react';
-import type { BookFormat, BookInfo } from '../../../shared/types';
+import type { BookFormat, BookHighlight, BookInfo, HighlightAnchor, HighlightColor } from '../../../shared/types';
 import { api } from '../api';
 import { Menu, ProgressBar, Spinner } from '../components/ui';
 import { clamp, cx, formatBytes, loadPref, savePref } from '../util';
-import type { CueProps, NavigateEvent, PageTheme, ReaderHandle, ReaderMeta, ReaderPrefs, ReaderProps, ReaderTarget } from './types';
+import type {
+  CueProps,
+  HighlightProps,
+  NavigateEvent,
+  PageTheme,
+  ReaderHandle,
+  ReaderMeta,
+  ReaderPrefs,
+  ReaderProps,
+  ReaderTarget,
+  SelectionInfo,
+} from './types';
 import { defaultPrefs } from './types';
+import { HighlighterToggle, HighlightsMenu } from './HighlightTools';
+import { SelectionPopover } from './SelectionPopover';
 
 type ReaderComponent = ComponentType<ReaderProps & RefAttributes<ReaderHandle>>;
 
@@ -70,18 +83,31 @@ const THEME_OPTIONS: { value: PageTheme; label: string; Icon: typeof Sun }[] = [
   { value: 'dark', label: 'Dark page', Icon: Moon },
 ];
 
+export interface ViewerHighlights {
+  items: BookHighlight[];
+  /** Moderators and admins can add and remove highlights. */
+  canEdit: boolean;
+  add(color: HighlightColor, anchor: HighlightAnchor, text: string, label: string): void;
+  remove(id: string): void;
+}
+
 export function BookViewer({
   book,
   target,
   onNavigate,
   cues,
   status,
+  highlights,
+  dictionary,
 }: {
   book: BookInfo;
   target: ReaderTarget;
   onNavigate: (event: NavigateEvent) => void;
   cues: CueProps;
   status?: ReactNode;
+  highlights: ViewerHighlights;
+  /** Show word definitions when text is selected. */
+  dictionary: boolean;
 }) {
   const [data, setData] = useState<ArrayBuffer | null>(null);
   const [progress, setProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
@@ -95,6 +121,52 @@ export function BookViewer({
   const [prefs, setPrefs] = useState<ReaderPrefs>(() => loadPref(prefsKey, defaultPrefs(!zoomable)));
   const handle = useRef<ReaderHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const [selection, setSelection] = useState<SelectionInfo | null>(null);
+  const [highlighter, setHighlighter] = useState(false);
+  const [hlPrefs, setHlPrefs] = useState(() => loadPref('highlights', { color: 'yellow' as HighlightColor, show: true }));
+  const updateHlPrefs = (patch: Partial<typeof hlPrefs>) =>
+    setHlPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      savePref('highlights', next);
+      return next;
+    });
+  const drawing = highlights.canEdit && highlighter;
+
+  // Readers call back with selections; keep the latest settings in a ref so the callback is stable.
+  const latest = useRef({ drawing, color: hlPrefs.color, add: highlights.add });
+  latest.current = { drawing, color: hlPrefs.color, add: highlights.add };
+
+  const onSelection = useCallback((info: SelectionInfo | null) => {
+    if (info && latest.current.drawing && info.anchor) {
+      latest.current.add(latest.current.color, info.anchor, info.text, info.label);
+      info.clear();
+      setSelection(null);
+      return;
+    }
+    setSelection(info);
+  }, []);
+
+  // Closing the pop-over also drops the selection, so it doesn't pop up again.
+  const closeSelection = useCallback(() => {
+    setSelection((current) => {
+      current?.clear();
+      return null;
+    });
+  }, []);
+
+  const readerHighlights = useMemo<HighlightProps>(
+    () => ({
+      items: hlPrefs.show ? highlights.items : [],
+      drawing,
+      color: hlPrefs.color,
+      create: (anchor, text, label) => latest.current.add(latest.current.color, anchor, text, label),
+    }),
+    [hlPrefs.show, hlPrefs.color, highlights.items, drawing],
+  );
+
+  useEffect(() => {
+    if (!highlights.canEdit) setHighlighter(false);
+  }, [highlights.canEdit]);
 
   const updatePrefs = (patch: Partial<ReaderPrefs>) => {
     setPrefs((prev) => {
@@ -133,6 +205,7 @@ export function BookViewer({
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === 'Escape') setHighlighter(false);
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         e.preventDefault();
         handle.current?.next();
@@ -209,6 +282,27 @@ export function BookViewer({
                 </div>
               )}
             </Menu>
+          )}
+          {(highlights.items.length > 0 || highlights.canEdit) && (
+            <HighlightsMenu
+              highlights={highlights.items}
+              visible={hlPrefs.show}
+              onToggleVisible={() => updateHlPrefs({ show: !hlPrefs.show })}
+              onGo={(h) => handle.current?.goToHighlight?.(h)}
+              onRemove={highlights.canEdit ? (h) => highlights.remove(h.id) : undefined}
+            />
+          )}
+          {highlights.canEdit && (
+            <HighlighterToggle
+              active={highlighter}
+              color={hlPrefs.color}
+              areaOnly={book.format === 'cbz'}
+              onToggle={() => {
+                setHighlighter((on) => !on);
+                if (!hlPrefs.show) updateHlPrefs({ show: true });
+              }}
+              onColor={(color) => updateHlPrefs({ color })}
+            />
           )}
         </div>
 
@@ -318,9 +412,25 @@ export function BookViewer({
               onNavigate={onNavigate}
               onMeta={onMeta}
               onError={onError}
+              onSelection={onSelection}
               cues={cues}
+              highlights={readerHighlights}
             />
           </Suspense>
+        )}
+        {selection && !drawing && (
+          <SelectionPopover
+            info={selection}
+            canHighlight={highlights.canEdit}
+            dictionary={dictionary}
+            onClose={closeSelection}
+            onHighlight={(color) => {
+              if (selection.anchor) highlights.add(color, selection.anchor, selection.text, selection.label);
+              updateHlPrefs({ color, show: true });
+              selection.clear();
+              setSelection(null);
+            }}
+          />
         )}
       </div>
     </div>

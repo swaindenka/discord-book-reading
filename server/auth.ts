@@ -17,14 +17,20 @@ declare global {
   }
 }
 
-export function toPublicUser(user: UserRecord): PublicUser {
+export function toPublicUser(user: UserRecord, isRootAdmin = false): PublicUser {
   return {
     id: user.id,
     name: user.displayName,
     username: user.username,
     avatarUrl: user.avatarUrl,
-    isAdmin: user.isAdmin,
+    isAdmin: user.isAdmin || isRootAdmin,
+    isRootAdmin,
   };
+}
+
+/** Discord user IDs are 17–20 digit snowflakes; developer-login IDs look like "dev-name". */
+export function isValidUserId(id: string) {
+  return /^\d{15,22}$/.test(id) || /^dev-[a-z0-9-]{1,40}$/.test(id);
 }
 
 export function parseCookies(header: string | undefined): Record<string, string> {
@@ -75,36 +81,76 @@ export class Signer {
   }
 }
 
-/** Small in-memory cache in front of the users table. */
+/**
+ * Small in-memory cache in front of the users table. It also keeps every cached user's
+ * `isAdmin` flag current: admins come from ADMIN_USER_IDS ("root" admins), from the
+ * site_admins table (added in the app), or from a Discord role.
+ */
 export class UserCache {
   private cache = new Map<string, UserRecord>();
-  constructor(private readonly db: Database) {}
+  private readonly rootAdmins: Set<string>;
+  private addedAdmins = new Set<string>();
+  private readonly adminsLoaded: Promise<void>;
+
+  constructor(
+    private readonly db: Database,
+    rootAdminIds: string[] = [],
+  ) {
+    this.rootAdmins = new Set(rootAdminIds);
+    this.adminsLoaded = this.reloadAdmins();
+  }
+
+  /** Re-reads the site_admins table and updates every cached user. */
+  async reloadAdmins() {
+    this.addedAdmins = new Set((await this.db.listSiteAdmins()).map((a) => a.userId));
+    for (const user of this.cache.values()) this.apply(user);
+  }
+
+  isRootAdmin(id: string) {
+    return this.rootAdmins.has(id);
+  }
+
+  isAddedAdmin(id: string) {
+    return this.addedAdmins.has(id);
+  }
+
+  get rootAdminIds() {
+    return [...this.rootAdmins];
+  }
+
+  private apply(user: UserRecord) {
+    user.isAdmin = user.roleAdmin || this.rootAdmins.has(user.id) || this.addedAdmins.has(user.id);
+    return user;
+  }
 
   peek(id: string) {
     return this.cache.get(id);
   }
 
-  remember(user: UserRecord) {
-    this.cache.set(user.id, user);
-  }
-
   async get(id: string): Promise<UserRecord | null> {
+    await this.adminsLoaded;
     const cached = this.cache.get(id);
     if (cached) return cached;
     const user = await this.db.getUser(id);
-    if (user) this.cache.set(id, user);
+    if (user) this.cache.set(id, this.apply(user));
     return user;
   }
 
   async preload(ids: Iterable<string>) {
+    await this.adminsLoaded;
     const missing = [...new Set(ids)].filter((id) => !this.cache.has(id));
     if (missing.length === 0) return;
-    for (const user of await this.db.getUsers(missing)) this.cache.set(user.id, user);
+    for (const user of await this.db.getUsers(missing)) this.cache.set(user.id, this.apply(user));
   }
 
   async save(user: UserRecord) {
+    await this.adminsLoaded;
     await this.db.upsertUser(user);
-    this.cache.set(user.id, user);
+    // Keep the same object identity so open sockets see profile and role changes.
+    const cached = this.cache.get(user.id);
+    const target = cached ? Object.assign(cached, user) : user;
+    this.cache.set(user.id, this.apply(target));
+    return target;
   }
 }
 
@@ -177,7 +223,7 @@ export class Auth {
   }
 
   private async startSession(res: Response, user: UserRecord) {
-    await this.users.save(user);
+    user = await this.users.save(user);
     const ttl = this.config.sessionDays * 24 * 3600;
     res.cookie(SESSION_COOKIE, this.signer.sign({ uid: user.id }, ttl), this.cookieOptions(ttl * 1000));
   }
@@ -195,7 +241,7 @@ export class Auth {
         client_id: discord.clientId,
         redirect_uri: discord.redirectUri,
         response_type: 'code',
-        scope: discord.guildId ? 'identify guilds.members.read' : 'identify',
+        scope: discord.guildIds.length ? 'identify guilds.members.read' : 'identify',
         state,
         prompt: 'none',
       });
@@ -233,10 +279,11 @@ export class Auth {
         username: slug,
         displayName: name,
         avatarUrl: null,
-        isAdmin: this.config.adminUserIds.includes(id),
+        roleAdmin: false,
+        isAdmin: false,
       };
       await this.startSession(res, user);
-      res.json({ user: toPublicUser(user) });
+      res.json({ user: toPublicUser(user, this.users.isRootAdmin(id)) });
     });
 
     router.post('/logout', (_req, res) => {
@@ -273,30 +320,35 @@ export class Auth {
       if (!meRes.ok) return { error: 'oauth_failed' };
       const me = (await meRes.json()) as { id: string; username: string; global_name?: string | null; avatar?: string | null };
 
+      // With an allow-list of servers, the person must be in at least one of them. Their
+      // nickname and avatar come from the first server they're in; roles from all of them.
       let nick: string | null = null;
-      let guildAvatar: string | null = null;
-      let roles: string[] = [];
-      if (discord.guildId) {
-        const memberRes = await fetch(`${discord.apiBase}/users/@me/guilds/${discord.guildId}/member`, {
-          headers: authHeader,
-        });
+      let guildAvatar: { id: string; avatar: string | null } | undefined;
+      const roles: string[] = [];
+      let memberOfAny = false;
+      for (const guildId of discord.guildIds) {
+        const memberRes = await fetch(`${discord.apiBase}/users/@me/guilds/${guildId}/member`, { headers: authHeader });
         if (memberRes.status === 429 || memberRes.status >= 500) return { error: 'oauth_failed' };
-        if (!memberRes.ok) return { error: 'not_member' };
+        if (!memberRes.ok) continue;
         const member = (await memberRes.json()) as { nick?: string | null; avatar?: string | null; roles?: string[] };
-        nick = member.nick ?? null;
-        guildAvatar = member.avatar ?? null;
-        roles = Array.isArray(member.roles) ? member.roles : [];
+        if (!memberOfAny) {
+          nick = member.nick ?? null;
+          guildAvatar = { id: guildId, avatar: member.avatar ?? null };
+        }
+        memberOfAny = true;
+        if (Array.isArray(member.roles)) roles.push(...member.roles);
       }
+      if (discord.guildIds.length && !memberOfAny) return { error: 'not_member' };
 
-      const isAdmin =
-        this.config.adminUserIds.includes(me.id) || roles.some((role) => discord.adminRoleIds.includes(role));
+      const roleAdmin = roles.some((role) => discord.adminRoleIds.includes(role));
       return {
         user: {
           id: me.id,
           username: me.username,
           displayName: (nick || me.global_name || me.username).slice(0, 64),
-          avatarUrl: discordAvatarUrl(me, discord.guildId ? { id: discord.guildId, avatar: guildAvatar } : undefined),
-          isAdmin,
+          avatarUrl: discordAvatarUrl(me, guildAvatar),
+          roleAdmin,
+          isAdmin: roleAdmin,
         },
       };
     } finally {

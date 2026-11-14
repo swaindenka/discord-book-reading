@@ -11,7 +11,10 @@ import type { AckResult, ClientToServerEvents, ServerToClientEvents } from '../s
 
 export type TestSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-type Overrides = Partial<Omit<Config, 'discord'>> & { discord?: Partial<Config['discord']> };
+type Overrides = Partial<Omit<Config, 'discord' | 'dictionary'>> & {
+  discord?: Partial<Config['discord']>;
+  dictionary?: Partial<Config['dictionary']>;
+};
 
 export async function startServer(overrides: Overrides = {}, existing?: { dir: string }) {
   const dir = existing?.dir ?? (await mkdtemp(path.join(os.tmpdir(), 'rr-test-')));
@@ -28,7 +31,8 @@ export async function startServer(overrides: Overrides = {}, existing?: { dir: s
     clientDir: path.join(dir, 'no-client-build'),
     storageDriver: 'local',
     ...overrides,
-    discord: { ...baseConfig.discord, enabled: false, guildId: null, adminRoleIds: [], ...overrides.discord },
+    discord: { ...baseConfig.discord, enabled: false, guildIds: [], adminRoleIds: [], ...overrides.discord },
+    dictionary: { ...baseConfig.dictionary, provider: null, ...overrides.dictionary },
   } as Config;
   const db = await Database.open(`file:${path.join(dir, 'test.db')}`);
   const storage =

@@ -21,7 +21,8 @@ export interface RoomPerspective {
 }
 
 export function perspective(state: RoomState, me: PublicUser): RoomPerspective {
-  const role = roleOf(state, me);
+  // Prefer the role the server computed: it reflects admin changes without a reload.
+  const role = state.members.find((m) => m.id === me.id)?.role ?? roleOf(state, me);
   return {
     me,
     role,

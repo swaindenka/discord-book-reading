@@ -31,10 +31,11 @@ Both setups need a Discord application first.
    - Under **Redirects**, add `https://YOUR-SITE/auth/discord/callback`. You'll know the exact address after step 2 (A or B); come back and add it then. For local development also add `http://localhost:5173/auth/discord/callback`.
 3. You do **not** need a bot.
 4. Turn on **Developer Mode** in Discord (User Settings → Advanced) so you can copy IDs:
-   - Right-click your server icon → **Copy Server ID**. This is `DISCORD_GUILD_ID`. Only members of this server will be able to sign in.
-   - Optional: Server Settings → Roles → right-click a role (e.g. "Book Club Mod") → **Copy Role ID**. This is `DISCORD_ADMIN_ROLE_IDS`. People with that role are admins in every room.
+   - Right-click your own name → **Copy User ID**. Put it in `ADMIN_USER_IDS` to become a site admin with owner rights in every room. You can then add more admins from the site (account menu → **Site admins**). Several IDs can be comma-separated.
+   - Optional: right-click a server icon → **Copy Server ID** and put it in `DISCORD_GUILD_IDS` to allow only members of that server (comma-separate several servers). Leave it empty to let anyone with a Discord account sign in.
+   - Optional, only together with `DISCORD_GUILD_IDS`: Server Settings → Roles → right-click a role → **Copy Role ID** for `DISCORD_ADMIN_ROLE_IDS`. People with that role are admins too.
 
-When `DISCORD_GUILD_ID` is set, the sign-in asks Discord for the `identify` and `guilds.members.read` scopes. The app reads each member's server nickname and roles once at sign-in, then revokes the Discord token.
+Without `DISCORD_GUILD_IDS`, sign-in only asks Discord for the `identify` scope. With it, the app also asks for `guilds.members.read` to check membership and roles. In both cases the Discord token is revoked right after sign-in.
 
 ---
 
@@ -59,8 +60,10 @@ Render's free web services have no persistent disk: anything written to local fi
    | --- | --- |
    | `DISCORD_CLIENT_ID` | from step 1 |
    | `DISCORD_CLIENT_SECRET` | from step 1 |
-   | `DISCORD_GUILD_ID` | your server ID (leave empty to allow any Discord user) |
+   | `ADMIN_USER_IDS` | your Discord user ID (site admin everywhere) |
+   | `DISCORD_GUILD_IDS` | optional: server IDs whose members may sign in (empty = anyone) |
    | `DISCORD_ADMIN_ROLE_IDS` | optional, comma-separated role IDs |
+   | `OXFORD_APP_ID`, `OXFORD_APP_KEY` | optional: Oxford Dictionaries API keys for word definitions |
    | `DATABASE_URL` | `libsql://…turso.io` |
    | `DATABASE_AUTH_TOKEN` | the Turso token |
 
@@ -134,7 +137,7 @@ PUBLIC_URL=https://ourbookclub.duckdns.org
 SESSION_SECRET=<output of: openssl rand -hex 32>
 DISCORD_CLIENT_ID=...
 DISCORD_CLIENT_SECRET=...
-DISCORD_GUILD_ID=...
+ADMIN_USER_IDS=<your Discord user ID>
 ```
 
 Then start it:
@@ -165,6 +168,12 @@ docker run --rm -v discord-book-reading_app-data:/data -v "$PWD":/backup busybox
 
 ---
 
+## Word definitions (optional Oxford keys)
+
+Selecting a word in a book shows its meaning. Out of the box this uses the free, Wiktionary-based [Free Dictionary API](https://dictionaryapi.dev), and every pop-up links to the word on the free Oxford Learner's Dictionary website.
+
+To show Oxford's own definitions, sign up for the [Oxford Dictionaries API](https://developer.oxforddictionaries.com) and set `OXFORD_APP_ID` and `OXFORD_APP_KEY`. Oxford's API is a paid service with a limited free trial. Answers are cached in the database for 30 days, so each word only uses your quota once.
+
 ## Other options
 
 - **Any VPS or home server.** The Docker Compose setup works anywhere Docker runs. At home, a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) can publish the site without opening router ports.
@@ -175,7 +184,9 @@ docker run --rm -v discord-book-reading_app-data:/data -v "$PWD":/backup busybox
 | Problem | Fix |
 | --- | --- |
 | Discord says `Invalid OAuth2 redirect_uri` | The redirect in the Discord portal must match the one printed in the server log exactly: `https`, no trailing slash. |
-| "You need to be a member of our Discord server" | Check `DISCORD_GUILD_ID`, and make sure the person has actually joined the server. |
+| "You need to be a member of our Discord community" | `DISCORD_GUILD_IDS` is set and the person isn't in any of those servers. Empty it to let anyone in. |
+| No "Site admins" item in the account menu | Your Discord user ID isn't in `ADMIN_USER_IDS`. Add it, redeploy, and reload the page. |
+| Word definitions say the dictionary isn't answering | The free dictionary may be down. Set Oxford API keys, or `DICTIONARY_PROVIDER=off`. The Oxford Learner's link still works. |
 | Everyone is signed out after a restart | Set a fixed `SESSION_SECRET`. |
 | Books or rooms disappear on Render | `DATABASE_URL` isn't set, so the app fell back to Render's temporary disk. |
 | The site stays on "Joining room…" | The proxy in front of the app must allow WebSocket upgrades. Render and the bundled Caddy setup already do. |
