@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from 'react';
 import { marked, type Token, type TokensList } from 'marked';
 import DOMPurify from 'dompurify';
+import { HIGHLIGHT_COLORS, type HighlightColor } from '../../../shared/types';
 import { usePagedSync } from './paged';
+import { clearDomSelection, rangeFromOffsets, rectOf, textOffsets, useSelectionWatcher } from './selection';
 import type { ReaderHandle, ReaderProps, TocItem } from './types';
 import { cx } from '../util';
 
@@ -95,11 +97,15 @@ function markdownPages(text: string): { pages: string[]; toc: TocItem[] } {
   return { pages, toc };
 }
 
+const COLOR_NAMES = Object.keys(HIGHLIGHT_COLORS) as HighlightColor[];
+const supportsHighlights = typeof CSS !== 'undefined' && 'highlights' in CSS;
+
 export const TextReader = forwardRef<ReaderHandle, ReaderProps>(function TextReader(
-  { book, data, target, prefs, onNavigate, onMeta },
+  { book, data, target, prefs, onNavigate, onMeta, onSelection, highlights },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const articleRef = useRef<HTMLElement>(null);
   const { pages, toc } = useMemo(() => {
     const text = decode(data);
     return book.format === 'md' ? markdownPages(text) : plainTextPages(text);
@@ -113,8 +119,54 @@ export const TextReader = forwardRef<ReaderHandle, ReaderProps>(function TextRea
       prev: () => goToPage(page - 1),
       goToPage,
       goToToc: (item) => item.page && goToPage(item.page),
+      goToHighlight: (h) => {
+        if (h.anchor.kind !== 'text') return;
+        if (h.anchor.page !== page) {
+          goToPage(h.anchor.page);
+          return;
+        }
+        const range = articleRef.current && rangeFromOffsets(articleRef.current, h.anchor.start, h.anchor.end);
+        range?.startContainer.parentElement?.scrollIntoView({ block: 'center' });
+      },
     }),
     [goToPage, page],
+  );
+
+  useSelectionWatcher(articleRef, (range) => {
+    const article = articleRef.current;
+    if (!range || !article) return onSelection(null);
+    const offsets = textOffsets(article, range);
+    onSelection({
+      text: range.toString(),
+      rect: rectOf(range),
+      anchor: offsets ? { kind: 'text', page, ...offsets } : null,
+      label: `Page ${page}`,
+      clear: clearDomSelection,
+    });
+  });
+
+  // Paint highlights with the CSS Custom Highlight API (no DOM changes needed).
+  useLayoutEffect(() => {
+    const article = articleRef.current;
+    if (!supportsHighlights || !article) return;
+    const byColor = new Map<HighlightColor, Range[]>();
+    for (const h of highlights.items) {
+      if (h.anchor.kind !== 'text' || h.anchor.page !== page) continue;
+      const range = rangeFromOffsets(article, h.anchor.start, h.anchor.end);
+      if (range) byColor.set(h.color, [...(byColor.get(h.color) ?? []), range]);
+    }
+    for (const color of COLOR_NAMES) {
+      const ranges = byColor.get(color);
+      if (ranges?.length) CSS.highlights.set(`rr-${color}`, new Highlight(...ranges));
+      else CSS.highlights.delete(`rr-${color}`);
+    }
+  }, [highlights.items, page, pages]);
+
+  useEffect(
+    () => () => {
+      if (supportsHighlights) COLOR_NAMES.forEach((color) => CSS.highlights.delete(`rr-${color}`));
+    },
+    [],
   );
 
   useEffect(() => {
@@ -128,6 +180,7 @@ export const TextReader = forwardRef<ReaderHandle, ReaderProps>(function TextRea
   return (
     <div className={cx('paged-scroll text-scroll', `page-theme-${prefs.theme}`)} ref={scrollRef} onScroll={onScroll}>
       <article
+        ref={articleRef}
         className={cx('text-page', book.format === 'md' && 'markdown')}
         style={{ fontSize: `${1.12 * prefs.fontScale}rem` }}
         // Plain text is escaped; Markdown output is sanitised with DOMPurify.

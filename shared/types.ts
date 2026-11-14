@@ -59,7 +59,21 @@ export interface PublicUser {
   name: string;
   username: string;
   avatarUrl: string | null;
+  /** Site-wide admin: owner rights in every room. */
   isAdmin: boolean;
+  /** Listed in ADMIN_USER_IDS: can add and remove other site admins. */
+  isRootAdmin: boolean;
+}
+
+export interface SiteAdmin {
+  userId: string;
+  /** Null when this person hasn't signed in yet. */
+  name: string | null;
+  avatarUrl: string | null;
+  /** From the ADMIN_USER_IDS setting (can't be removed in the app). */
+  fromConfig: boolean;
+  addedByName: string | null;
+  createdAt: number | null;
 }
 
 export type MemberRole = 'owner' | 'admin' | 'mod' | 'member';
@@ -152,11 +166,65 @@ export interface PointerEvent {
   y: number | null;
 }
 
-export interface HighlightEvent {
+/** The reader's current EPUB text selection, shown live to followers. */
+export interface SelectionCue {
   userId: string;
   bookId: string;
-  /** EPUB CFI range; null clears the highlight. */
+  /** EPUB CFI range; null clears it. */
   cfiRange: string | null;
+}
+
+export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink';
+export const HIGHLIGHT_COLORS: Record<HighlightColor, { label: string; css: string }> = {
+  yellow: { label: 'Yellow', css: '#ffd43b' },
+  green: { label: 'Green', css: '#69db7c' },
+  blue: { label: 'Blue', css: '#74c0fc' },
+  pink: { label: 'Pink', css: '#f783ac' },
+};
+
+/** Where a highlight sits. The shape depends on the book format. */
+export type HighlightAnchor =
+  /** EPUB: a CFI range. */
+  | { kind: 'cfi'; cfiRange: string }
+  /** PDF / CBZ: boxes on a page as [x, y, width, height], each 0–1 of the page size. */
+  | { kind: 'rects'; page: number; rects: [number, number, number, number][] }
+  /** TXT / Markdown: character offsets within a page's text. */
+  | { kind: 'text'; page: number; start: number; end: number };
+
+export interface BookHighlight {
+  id: string;
+  bookId: string;
+  color: HighlightColor;
+  anchor: HighlightAnchor;
+  /** The highlighted text (empty for area highlights). */
+  text: string;
+  /** "Page 12" or the chapter name. */
+  label: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: number;
+}
+
+export const HIGHLIGHT_LIMITS = { text: 1000, rects: 200, perBook: 2000 } as const;
+
+export interface DictionarySense {
+  partOfSpeech: string;
+  definitions: { text: string; example?: string }[];
+}
+
+export interface DictionaryEntry {
+  word: string;
+  phonetic?: string;
+  senses: DictionarySense[];
+  source: 'oxford' | 'free';
+  sourceLabel: string;
+}
+
+export interface DictionaryResult {
+  query: string;
+  entry: DictionaryEntry | null;
+  /** Oxford Learner's Dictionaries search page for the word. */
+  oxfordUrl: string;
 }
 
 export interface AppConfig {
@@ -165,6 +233,8 @@ export interface AppConfig {
   devLogin: boolean;
   guildRestricted: boolean;
   maxUploadMb: number;
+  /** Which dictionary answers word look-ups, or null when look-ups are off. */
+  dictionary: 'oxford' | 'free' | null;
 }
 
 export type ModAction =
@@ -189,7 +259,10 @@ export type AckResult<T extends object = object> = ({ ok: true } & T) | { ok: fa
 export type Ack<T extends object = object> = (result: AckResult<T>) => void;
 
 export interface ClientToServerEvents {
-  'room:join': (payload: { roomId: string }, ack: Ack<{ state: RoomState; messages: ChatMessage[] }>) => void;
+  'room:join': (
+    payload: { roomId: string },
+    ack: Ack<{ state: RoomState; messages: ChatMessage[]; highlights: BookHighlight[] }>,
+  ) => void;
   'room:leave': () => void;
   'queue:join': (ack: Ack) => void;
   'queue:leave': (ack: Ack) => void;
@@ -199,7 +272,12 @@ export interface ClientToServerEvents {
   'turn:pass': (ack: Ack) => void;
   'nav:set': (payload: { bookId: string; position: Position }, ack?: Ack) => void;
   pointer: (payload: Omit<PointerEvent, 'userId'>) => void;
-  highlight: (payload: Omit<HighlightEvent, 'userId'>) => void;
+  selection: (payload: Omit<SelectionCue, 'userId'>) => void;
+  'highlight:add': (
+    payload: { bookId: string; color: HighlightColor; anchor: HighlightAnchor; text: string; label: string },
+    ack: Ack<{ highlight: BookHighlight }>,
+  ) => void;
+  'highlight:remove': (payload: { id: string }, ack: Ack) => void;
   'chat:send': (payload: { body: string }, ack: Ack) => void;
   'chat:delete': (payload: { messageId: string }, ack: Ack) => void;
   'mod:action': (action: ModAction, ack: Ack) => void;
@@ -211,7 +289,10 @@ export interface ServerToClientEvents {
   'room:deleted': () => void;
   'nav:position': (payload: { bookId: string; position: Position; by: string }) => void;
   pointer: (payload: PointerEvent) => void;
-  highlight: (payload: HighlightEvent) => void;
+  selection: (payload: SelectionCue) => void;
+  'highlights:set': (payload: { bookId: string; highlights: BookHighlight[] }) => void;
+  'highlight:added': (highlight: BookHighlight) => void;
+  'highlight:removed': (payload: { id: string; bookId: string }) => void;
   'chat:message': (message: ChatMessage) => void;
   'chat:deleted': (payload: { id: string }) => void;
 }

@@ -2,7 +2,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { PointerSurface, useElementSize, usePagedSync } from './paged';
+import { pageBoxes, PointerSurface, useElementSize, usePagedSync } from './paged';
+import { clearDomSelection, rangeToPageRects, rectOf, useSelectionWatcher } from './selection';
 import type { ReaderHandle, ReaderProps, TocItem } from './types';
 import { Spinner } from '../components/ui';
 import { cx } from '../util';
@@ -37,10 +38,11 @@ async function resolveOutline(doc: PDFDocumentProxy): Promise<TocItem[]> {
 }
 
 export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReader(
-  { book, data, target, prefs, onNavigate, onMeta, onError, cues },
+  { book, data, target, prefs, onNavigate, onMeta, onError, onSelection, cues, highlights },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -57,9 +59,26 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
       prev: () => goToPage(page - 1),
       goToPage,
       goToToc: (item) => item.page && goToPage(item.page),
+      goToHighlight: (h) => {
+        if (h.anchor.kind === 'rects') goToPage(h.anchor.page, h.anchor.rects[0]?.[1]);
+      },
     }),
     [goToPage, page],
   );
+
+  // Text selected on the page: offer a dictionary look-up or a highlight.
+  useSelectionWatcher(pageRef, (range) => {
+    const surface = pageRef.current;
+    if (!range || !surface) return onSelection(null);
+    const rects = rangeToPageRects(range, surface);
+    onSelection({
+      text: range.toString(),
+      rect: rectOf(range),
+      anchor: rects.length ? { kind: 'rects', page, rects } : null,
+      label: `Page ${page}`,
+      clear: clearDomSelection,
+    });
+  });
 
   // Load the document. pdf.js takes ownership of the buffer, so hand it a copy.
   useEffect(() => {
@@ -91,9 +110,13 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
     if (pageCount) onMeta({ label: `Page ${page} of ${pageCount}`, page, pageCount, toc });
   }, [page, pageCount, toc, onMeta]);
 
+  // Height only matters when fitting the whole page; ignoring it otherwise avoids
+  // re-rendering (and losing a text selection) when the toolbar changes height.
+  const fitHeight = prefs.fit === 'page' ? size.height : 1;
+
   // Render the current page whenever it, the window size or zoom changes.
   useEffect(() => {
-    if (!doc || !size.width || !size.height) return;
+    if (!doc || !size.width || !fitHeight) return;
     let cancelled = false;
     let renderTask: RenderTask | null = null;
     let textLayer: pdfjs.TextLayer | null = null;
@@ -102,7 +125,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
       if (cancelled) return;
       const base = pdfPage.getViewport({ scale: 1 });
       const availW = Math.max(100, size.width);
-      const availH = Math.max(100, size.height);
+      const availH = Math.max(100, fitHeight);
       const fitScale = prefs.fit === 'page' ? Math.min(availW / base.width, availH / base.height) : availW / base.width;
       const scale = Math.min(8, fitScale * prefs.zoom);
       const viewport = pdfPage.getViewport({ scale });
@@ -140,7 +163,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
       renderTask?.cancel();
       textLayer?.cancel();
     };
-  }, [doc, page, size.width, size.height, prefs.fit, prefs.zoom, markRendered]);
+  }, [doc, page, size.width, fitHeight, prefs.fit, prefs.zoom, markRendered]);
 
   return (
     <div className={cx('paged-scroll', `page-theme-${prefs.theme}`)} ref={scrollRef} onScroll={onScroll}>
@@ -149,8 +172,17 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
         page={page}
         cues={cues}
         bookId={book.id}
+        surfaceRef={pageRef}
         className={cx('pdf-page', !pageSize && 'hidden')}
         style={pageSize ? { width: pageSize.width, height: pageSize.height } : undefined}
+        highlights={pageBoxes(highlights.items, page)}
+        draw={{
+          enabled: highlights.drawing,
+          color: highlights.color,
+          // Drags that start on text select it; drags on empty space draw a box (works for scanned pages).
+          canStart: (el) => !(el instanceof HTMLElement && el.closest('.textLayer span')),
+          onDone: (box) => highlights.create({ kind: 'rects', page, rects: [box] }, '', `Page ${page}`),
+        }}
       >
         <div className="pdf-canvas" ref={canvasHost} />
         <div className="textLayer" ref={textLayerRef} />

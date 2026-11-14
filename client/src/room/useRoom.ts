@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  BookHighlight,
   ChatMessage,
-  HighlightEvent,
+  HighlightAnchor,
+  HighlightColor,
   ModAction,
   PointerEvent,
   Position,
   RoomState,
+  SelectionCue,
 } from '../../../shared/types';
 import { getSocket, request } from '../socket';
 import { useToast } from '../components/Toasts';
@@ -21,7 +24,11 @@ export function useRoom(roomId: string) {
   const [connected, setConnected] = useState(true);
   const [exit, setExit] = useState<RoomExit>(null);
   const [pointer, setPointer] = useState<PointerEvent | null>(null);
-  const [highlight, setHighlight] = useState<HighlightEvent | null>(null);
+  const [selection, setSelection] = useState<SelectionCue | null>(null);
+  const [highlightSet, setHighlightSet] = useState<{ bookId: string | null; items: BookHighlight[] }>({
+    bookId: null,
+    items: [],
+  });
   /** server clock − local clock, for turn timers. */
   const clockOffset = useRef(0);
 
@@ -30,12 +37,13 @@ export function useRoom(roomId: string) {
     let alive = true;
 
     const join = () => {
-      request<{ state: RoomState; messages: ChatMessage[] }>('room:join', { roomId })
+      request<{ state: RoomState; messages: ChatMessage[]; highlights: BookHighlight[] }>('room:join', { roomId })
         .then((res) => {
           if (!alive) return;
           clockOffset.current = res.state.serverTime - Date.now();
           setState(res.state);
           setMessages(res.messages);
+          setHighlightSet({ bookId: res.state.activeBookId, items: res.highlights });
           setError(null);
         })
         .catch((err: Error) => alive && setError(err.message));
@@ -61,6 +69,14 @@ export function useRoom(roomId: string) {
     const onDeleted = ({ id }: { id: string }) => setMessages((list) => list.filter((m) => m.id !== id));
     const onKicked = ({ banned }: { banned: boolean }) => setExit(banned ? 'banned' : 'kicked');
     const onRoomDeleted = () => setExit('deleted');
+    const onHighlightsSet = ({ bookId, highlights }: { bookId: string; highlights: BookHighlight[] }) =>
+      setHighlightSet({ bookId, items: highlights });
+    const onHighlightAdded = (h: BookHighlight) =>
+      setHighlightSet((set) =>
+        set.bookId === h.bookId && !set.items.some((x) => x.id === h.id) ? { ...set, items: [...set.items, h] } : set,
+      );
+    const onHighlightRemoved = ({ id }: { id: string }) =>
+      setHighlightSet((set) => ({ ...set, items: set.items.filter((h) => h.id !== id) }));
     const onConnectError = (err: Error) => {
       if (err.message === 'unauthorized') window.location.assign(`/login?returnTo=${encodeURIComponent(`/room/${roomId}`)}`);
     };
@@ -75,7 +91,10 @@ export function useRoom(roomId: string) {
     socket.on('room:kicked', onKicked);
     socket.on('room:deleted', onRoomDeleted);
     socket.on('pointer', setPointer);
-    socket.on('highlight', setHighlight);
+    socket.on('selection', setSelection);
+    socket.on('highlights:set', onHighlightsSet);
+    socket.on('highlight:added', onHighlightAdded);
+    socket.on('highlight:removed', onHighlightRemoved);
     if (socket.connected) join();
 
     return () => {
@@ -90,7 +109,10 @@ export function useRoom(roomId: string) {
       socket.off('room:kicked', onKicked);
       socket.off('room:deleted', onRoomDeleted);
       socket.off('pointer', setPointer);
-      socket.off('highlight', setHighlight);
+      socket.off('selection', setSelection);
+      socket.off('highlights:set', onHighlightsSet);
+      socket.off('highlight:added', onHighlightAdded);
+      socket.off('highlight:removed', onHighlightRemoved);
       socket.emit('room:leave');
     };
   }, [roomId]);
@@ -118,6 +140,9 @@ export function useRoom(roomId: string) {
       sendChat: (body: string) => run('chat:send', { body }),
       deleteMessage: (messageId: string) => run('chat:delete', { messageId }),
       moderate: (action: ModAction) => run('mod:action', action),
+      addHighlight: (bookId: string, color: HighlightColor, anchor: HighlightAnchor, text: string, label: string) =>
+        run('highlight:add', { bookId, color, anchor, text, label }),
+      removeHighlight: (id: string) => run('highlight:remove', { id }),
     }),
     [run],
   );
@@ -136,9 +161,11 @@ export function useRoom(roomId: string) {
     getSocket().volatile.emit('pointer', { bookId, page, x, y });
   }, []);
 
-  const sendHighlight = useCallback((bookId: string, cfiRange: string | null) => {
-    getSocket().emit('highlight', { bookId, cfiRange });
+  const sendSelection = useCallback((bookId: string, cfiRange: string | null) => {
+    getSocket().emit('selection', { bookId, cfiRange });
   }, []);
+
+  const highlights = state && highlightSet.bookId === state.activeBookId ? highlightSet.items : [];
 
   return {
     state,
@@ -147,12 +174,13 @@ export function useRoom(roomId: string) {
     connected,
     exit,
     pointer,
-    highlight,
+    selection,
+    highlights,
     clockOffset,
     actions,
     setPosition,
     sendPointer,
-    sendHighlight,
+    sendSelection,
   };
 }
 

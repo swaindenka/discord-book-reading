@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import JSZip from 'jszip';
-import { PointerSurface, useElementSize, usePagedSync } from './paged';
+import { pageBoxes, PointerSurface, useElementSize, usePagedSync } from './paged';
 import type { ReaderHandle, ReaderProps } from './types';
 import { Spinner } from '../components/ui';
 import { cx } from '../util';
@@ -10,7 +10,7 @@ const IMAGE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export const ComicReader = forwardRef<ReaderHandle, ReaderProps>(function ComicReader(
-  { book, data, target, prefs, onNavigate, onMeta, onError, cues },
+  { book, data, target, prefs, onNavigate, onMeta, onError, cues, highlights },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -24,7 +24,14 @@ export const ComicReader = forwardRef<ReaderHandle, ReaderProps>(function ComicR
 
   useImperativeHandle(
     ref,
-    () => ({ next: () => goToPage(page + 1), prev: () => goToPage(page - 1), goToPage }),
+    () => ({
+      next: () => goToPage(page + 1),
+      prev: () => goToPage(page - 1),
+      goToPage,
+      goToHighlight: (h) => {
+        if (h.anchor.kind === 'rects') goToPage(h.anchor.page, h.anchor.rects[0]?.[1]);
+      },
+    }),
     [goToPage, page],
   );
 
@@ -95,7 +102,19 @@ export const ComicReader = forwardRef<ReaderHandle, ReaderProps>(function ComicR
     <div className={cx('paged-scroll', `page-theme-${prefs.theme}`)} ref={scrollRef} onScroll={onScroll}>
       {!src && <Spinner label="Opening comic…" />}
       {src && (
-        <PointerSurface page={page} cues={cues} bookId={book.id} className="comic-page" style={display ?? undefined}>
+        <PointerSurface
+          page={page}
+          cues={cues}
+          bookId={book.id}
+          className="comic-page"
+          style={display ?? undefined}
+          highlights={pageBoxes(highlights.items, page)}
+          draw={{
+            enabled: highlights.drawing,
+            color: highlights.color,
+            onDone: (box) => highlights.create({ kind: 'rects', page, rects: [box] }, '', `Page ${page}`),
+          }}
+        >
           <img
             src={src}
             alt={`Page ${page}`}

@@ -5,7 +5,7 @@ import { navigate, useDocumentTitle, useLocation } from '../router';
 import { useSession } from '../session';
 
 const ERRORS: Record<string, string> = {
-  not_member: 'You need to be a member of our Discord server to sign in.',
+  not_member: 'You need to be a member of our Discord community to sign in.',
   denied: 'Discord sign-in was cancelled.',
   state: 'That sign-in attempt expired. Please try again.',
   oauth_failed: 'Discord sign-in failed. Please try again in a moment.',
@@ -80,7 +80,7 @@ export function LoginPage() {
           </a>
         )}
         {config.discordLogin && config.guildRestricted && (
-          <p className="muted small center">Only members of our Discord server can join.</p>
+          <p className="muted small center">Sign-in is limited to members of our Discord community.</p>
         )}
 
         {config.devLogin && (

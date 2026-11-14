@@ -8,6 +8,7 @@ import type { Config } from './config.js';
 import type { Database } from './db.js';
 import { Auth, UserCache } from './auth.js';
 import { apiRouter } from './api.js';
+import { Dictionary } from './dictionary.js';
 import { RoomManager, UserError, type IO } from './rooms.js';
 import { setupSockets } from './sockets.js';
 import type { BookStorage } from './storage.js';
@@ -68,7 +69,8 @@ export function createApp({ config, db, storage }: AppDeps): App {
     }),
   );
 
-  const users = new UserCache(db);
+  const users = new UserCache(db, config.adminUserIds);
+  const dictionary = new Dictionary(config.dictionary, db);
   const auth = new Auth(config, users);
   const http = createServer(app);
   const io: IO = new Server(http, {
@@ -87,7 +89,7 @@ export function createApp({ config, db, storage }: AppDeps): App {
   app.use(auth.middleware());
   app.use(['/api', '/auth'], csrfGuard);
   app.use('/auth', auth.router());
-  app.use('/api', apiRouter({ config, db, storage, rooms }));
+  app.use('/api', apiRouter({ config, db, storage, rooms, users, dictionary }));
 
   setupSockets({ io, auth, db, rooms });
 

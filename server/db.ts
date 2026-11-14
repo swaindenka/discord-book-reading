@@ -1,7 +1,15 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createClient, type Client, type InValue, type Row } from '@libsql/client';
-import type { BookFormat, ChatMessage, Position, RoomSettings } from '../shared/types.js';
+import type {
+  BookFormat,
+  BookHighlight,
+  ChatMessage,
+  HighlightAnchor,
+  HighlightColor,
+  Position,
+  RoomSettings,
+} from '../shared/types.js';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.js';
 
 export interface UserRecord {
@@ -9,7 +17,16 @@ export interface UserRecord {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  /** Admin through a Discord role (DISCORD_ADMIN_ROLE_IDS), checked at sign-in. */
+  roleAdmin: boolean;
+  /** Effective site-admin flag; kept up to date by UserCache. */
   isAdmin: boolean;
+}
+
+export interface SiteAdminRecord {
+  userId: string;
+  addedBy: string;
+  createdAt: number;
 }
 
 export interface PersistedTurnState {
@@ -94,6 +111,29 @@ const SCHEMA = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS site_admins (
+    user_id TEXT PRIMARY KEY,
+    added_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS highlights (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    room_id TEXT NOT NULL,
+    color TEXT NOT NULL,
+    anchor TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    label TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_by_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS dictionary_cache (
+    key TEXT PRIMARY KEY,
+    data TEXT,
+    fetched_at INTEGER NOT NULL
+  )`,
 ];
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -114,7 +154,22 @@ function rowToUser(row: Row): UserRecord {
     username: String(row.username),
     displayName: String(row.display_name),
     avatarUrl: str(row.avatar_url),
+    roleAdmin: num(row.is_admin) === 1,
     isAdmin: num(row.is_admin) === 1,
+  };
+}
+
+function rowToHighlight(row: Row): BookHighlight {
+  return {
+    id: String(row.id),
+    bookId: String(row.book_id),
+    color: String(row.color) as HighlightColor,
+    anchor: parseJson<HighlightAnchor>(row.anchor, { kind: 'text', page: 1, start: 0, end: 0 }),
+    text: String(row.text ?? ''),
+    label: String(row.label ?? ''),
+    createdBy: String(row.created_by),
+    createdByName: String(row.created_by_name),
+    createdAt: num(row.created_at),
   };
 }
 
@@ -203,7 +258,7 @@ export class Database {
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET username = excluded.username, display_name = excluded.display_name,
          avatar_url = excluded.avatar_url, is_admin = excluded.is_admin, last_login_at = excluded.last_login_at`,
-      [user.id, user.username, user.displayName, user.avatarUrl, user.isAdmin ? 1 : 0, now, now],
+      [user.id, user.username, user.displayName, user.avatarUrl, user.roleAdmin ? 1 : 0, now, now],
     );
   }
 
@@ -287,6 +342,7 @@ export class Database {
     await this.client.batch(
       [
         { sql: 'DELETE FROM messages WHERE room_id = ?', args: [id] },
+        { sql: 'DELETE FROM highlights WHERE room_id = ?', args: [id] },
         { sql: 'DELETE FROM books WHERE room_id = ?', args: [id] },
         { sql: 'DELETE FROM rooms WHERE id = ?', args: [id] },
       ],
@@ -329,7 +385,62 @@ export class Database {
   }
 
   async deleteBook(id: string): Promise<void> {
-    await this.run('DELETE FROM books WHERE id = ?', [id]);
+    await this.client.batch(
+      [
+        { sql: 'DELETE FROM highlights WHERE book_id = ?', args: [id] },
+        { sql: 'DELETE FROM books WHERE id = ?', args: [id] },
+      ],
+      'write',
+    );
+  }
+
+  // ---- highlights ------------------------------------------------------------
+
+  async listHighlights(bookId: string): Promise<BookHighlight[]> {
+    const rows = await this.all('SELECT * FROM highlights WHERE book_id = ? ORDER BY created_at ASC', [bookId]);
+    return rows.map(rowToHighlight);
+  }
+
+  async addHighlight(roomId: string, h: BookHighlight): Promise<void> {
+    await this.run(
+      `INSERT INTO highlights (id, book_id, room_id, color, anchor, text, label, created_by, created_by_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [h.id, h.bookId, roomId, h.color, JSON.stringify(h.anchor), h.text, h.label, h.createdBy, h.createdByName, h.createdAt],
+    );
+  }
+
+  async deleteHighlight(id: string): Promise<void> {
+    await this.run('DELETE FROM highlights WHERE id = ?', [id]);
+  }
+
+  // ---- site admins -----------------------------------------------------------
+
+  async listSiteAdmins(): Promise<SiteAdminRecord[]> {
+    const rows = await this.all('SELECT * FROM site_admins ORDER BY created_at ASC');
+    return rows.map((row) => ({ userId: String(row.user_id), addedBy: String(row.added_by), createdAt: num(row.created_at) }));
+  }
+
+  async addSiteAdmin(userId: string, addedBy: string): Promise<void> {
+    await this.run('INSERT OR IGNORE INTO site_admins (user_id, added_by, created_at) VALUES (?, ?, ?)', [
+      userId,
+      addedBy,
+      Date.now(),
+    ]);
+  }
+
+  async removeSiteAdmin(userId: string): Promise<void> {
+    await this.run('DELETE FROM site_admins WHERE user_id = ?', [userId]);
+  }
+
+  // ---- dictionary cache ------------------------------------------------------
+
+  async getCached(key: string): Promise<{ data: string | null; fetchedAt: number } | null> {
+    const [row] = await this.all('SELECT data, fetched_at FROM dictionary_cache WHERE key = ?', [key]);
+    return row ? { data: str(row.data), fetchedAt: num(row.fetched_at) } : null;
+  }
+
+  async putCached(key: string, data: string | null): Promise<void> {
+    await this.run('INSERT OR REPLACE INTO dictionary_cache (key, data, fetched_at) VALUES (?, ?, ?)', [key, data, Date.now()]);
   }
 
   // ---- book file chunks (database storage driver) ----------------------------

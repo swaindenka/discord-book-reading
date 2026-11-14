@@ -1,4 +1,4 @@
-import type { AppConfig, PublicUser, RoomSummary } from '../../shared/types';
+import type { AppConfig, DictionaryResult, PublicUser, RoomSummary, SiteAdmin } from '../../shared/types';
 
 export class ApiError extends Error {
   constructor(
@@ -55,4 +55,8 @@ export const api = {
     upload<{ id: string }>(`/api/rooms/${roomId}/books`, form, onProgress),
   deleteBook: (roomId: string, bookId: string) => request<{ ok: true }>('DELETE', `/api/rooms/${roomId}/books/${bookId}`),
   bookUrl: (bookId: string) => `/api/books/${bookId}/file`,
+  define: (word: string) => request<DictionaryResult>('GET', `/api/dictionary?word=${encodeURIComponent(word)}`),
+  admins: () => request<{ admins: SiteAdmin[] }>('GET', '/api/admins'),
+  addAdmin: (userId: string) => request<{ admins: SiteAdmin[] }>('POST', '/api/admins', { userId }),
+  removeAdmin: (userId: string) => request<{ admins: SiteAdmin[] }>('DELETE', `/api/admins/${encodeURIComponent(userId)}`),
 };

@@ -4,16 +4,26 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer';
 import type { Config } from './config.js';
 import type { Database, BookRecord, UserRecord } from './db.js';
-import { requireUser, toPublicUser } from './auth.js';
+import { isValidUserId, requireUser, toPublicUser, type UserCache } from './auth.js';
+import { normalizeQuery, type Dictionary } from './dictionary.js';
 import type { BookStorage } from './storage.js';
 import { newId, UserError, type LiveRoom, type RoomManager } from './rooms.js';
-import { BOOK_FORMATS, LIMITS, formatFromFilename, type AppConfig, type BookFormat } from '../shared/types.js';
+import {
+  BOOK_FORMATS,
+  LIMITS,
+  formatFromFilename,
+  type AppConfig,
+  type BookFormat,
+  type SiteAdmin,
+} from '../shared/types.js';
 
 interface ApiDeps {
   config: Config;
   db: Database;
   storage: BookStorage;
   rooms: RoomManager;
+  users: UserCache;
+  dictionary: Dictionary;
 }
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
@@ -53,7 +63,7 @@ function cleanTitle(raw: unknown, filename: string) {
   return title.slice(0, LIMITS.bookTitle) || 'Untitled book';
 }
 
-export function apiRouter({ config, db, storage, rooms }: ApiDeps) {
+export function apiRouter({ config, db, storage, rooms, users, dictionary }: ApiDeps) {
   const router = Router();
   const upload = multer({
     dest: path.join(config.dataDir, 'tmp'),
@@ -117,15 +127,107 @@ export function apiRouter({ config, db, storage, rooms }: ApiDeps) {
       appName: config.appName,
       discordLogin: config.discord.enabled,
       devLogin: config.devLogin,
-      guildRestricted: Boolean(config.discord.guildId),
+      guildRestricted: config.discord.guildIds.length > 0,
       maxUploadMb: config.maxUploadMb,
+      dictionary: dictionary.provider,
     };
     res.json(body);
   });
 
   router.get('/me', (req, res) => {
-    res.json({ user: req.user ? toPublicUser(req.user) : null });
+    res.json({ user: req.user ? toPublicUser(req.user, users.isRootAdmin(req.user.id)) : null });
   });
+
+  // ---- dictionary --------------------------------------------------------------
+
+  router.get(
+    '/dictionary',
+    requireUser,
+    wrap(async (req, res) => {
+      const query = normalizeQuery(req.query.word);
+      if (!query) return res.status(400).json({ error: 'Select a word (or a short phrase) to look it up.' });
+      if (!dictionary.allow(req.user!.id)) return res.status(429).json({ error: 'Too many look-ups. Try again in a minute.' });
+      try {
+        res.setHeader('Cache-Control', 'private, max-age=86400');
+        res.json(await dictionary.define(query));
+      } catch (err) {
+        console.warn('[dictionary]', (err as Error).message);
+        res.status(502).json({ error: 'The dictionary is not answering right now.' });
+      }
+    }),
+  );
+
+  // ---- site admins -------------------------------------------------------------
+
+  const listAdmins = async (): Promise<SiteAdmin[]> => {
+    const added = await db.listSiteAdmins();
+    const ids = [...new Set([...users.rootAdminIds, ...added.map((a) => a.userId), ...added.map((a) => a.addedBy)])];
+    await users.preload(ids);
+    const fromConfig = new Set(users.rootAdminIds);
+    const describe = (userId: string, extra: Partial<SiteAdmin>): SiteAdmin => {
+      const user = users.peek(userId);
+      return {
+        userId,
+        name: user?.displayName ?? null,
+        avatarUrl: user?.avatarUrl ?? null,
+        fromConfig: fromConfig.has(userId),
+        addedByName: null,
+        createdAt: null,
+        ...extra,
+      };
+    };
+    return [
+      ...users.rootAdminIds.map((id) => describe(id, {})),
+      ...added
+        .filter((a) => !fromConfig.has(a.userId))
+        .map((a) => describe(a.userId, { addedByName: users.peek(a.addedBy)?.displayName ?? null, createdAt: a.createdAt })),
+    ];
+  };
+
+  const requireRootAdmin = (req: Request) => {
+    if (!users.isRootAdmin(req.user!.id)) {
+      throw Object.assign(new UserError('Only the admins listed in ADMIN_USER_IDS can manage site admins.'), { status: 403 });
+    }
+  };
+
+  router.get(
+    '/admins',
+    requireUser,
+    wrap(async (req, res) => {
+      if (!req.user!.isAdmin) return res.status(403).json({ error: 'Only site admins can see this.' });
+      res.json({ admins: await listAdmins() });
+    }),
+  );
+
+  router.post(
+    '/admins',
+    requireUser,
+    wrap(async (req, res) => {
+      requireRootAdmin(req);
+      const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
+      if (!isValidUserId(userId)) throw new UserError('That does not look like a Discord user ID (17–20 digits).');
+      await db.addSiteAdmin(userId, req.user!.id);
+      await users.reloadAdmins();
+      rooms.broadcastAll();
+      res.status(201).json({ admins: await listAdmins() });
+    }),
+  );
+
+  router.delete(
+    '/admins/:userId',
+    requireUser,
+    wrap(async (req, res) => {
+      requireRootAdmin(req);
+      const userId = String(req.params.userId);
+      if (users.isRootAdmin(userId)) {
+        throw new UserError('This admin comes from the ADMIN_USER_IDS setting; remove them there.');
+      }
+      await db.removeSiteAdmin(userId);
+      await users.reloadAdmins();
+      rooms.broadcastAll();
+      res.json({ admins: await listAdmins() });
+    }),
+  );
 
   router.get(
     '/rooms',

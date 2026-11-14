@@ -72,8 +72,11 @@ export function setupSockets({ io, auth, db, rooms }: SocketDeps) {
         const room = roomId ? await rooms.get(roomId) : null;
         if (!room || room.deleted) throw new UserError('This room does not exist (anymore).');
         await room.join(socket);
-        const messages = await db.recentMessages(room.id, LIMITS.chatHistory);
-        return { state: room.snapshot(), messages };
+        const [messages, highlights] = await Promise.all([
+          db.recentMessages(room.id, LIMITS.chatHistory),
+          room.highlightsFor(room.record.activeBookId),
+        ]);
+        return { state: room.snapshot(), messages, highlights };
       }),
     );
 
@@ -124,15 +127,26 @@ export function setupSockets({ io, auth, db, rooms }: SocketDeps) {
       socket.to(channel(room.id)).volatile.emit('pointer', { userId: user.id, bookId: payload.bookId, page, x, y });
     });
 
-    socket.on('highlight', async (payload) => {
+    socket.on('selection', async (payload) => {
       const room = socket.data.roomId ? await rooms.get(socket.data.roomId) : null;
       if (!room || !room.canControl(user.id) || room.activeBook?.id !== payload?.bookId) return;
       const cfiRange = payload.cfiRange;
       if (cfiRange !== null && (typeof cfiRange !== 'string' || !cfiRange.startsWith('epubcfi(') || cfiRange.length > 2000)) {
         return;
       }
-      socket.to(channel(room.id)).emit('highlight', { userId: user.id, bookId: payload.bookId, cfiRange });
+      socket.to(channel(room.id)).emit('selection', { userId: user.id, bookId: payload.bookId, cfiRange });
     });
+
+    socket.on(
+      'highlight:add',
+      handle(async (payload: Record<string, unknown>) => ({
+        highlight: await (await currentRoom()).addHighlight(user, payload),
+      })),
+    );
+    socket.on(
+      'highlight:remove',
+      handle(async (payload: { id?: unknown }) => (await currentRoom()).removeHighlight(user, payload?.id)),
+    );
 
     socket.on(
       'chat:send',

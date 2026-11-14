@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import ePub from 'epubjs';
+import ePub, { EpubCFI } from 'epubjs';
 import type { Book, Rendition } from 'epubjs';
-import type { Position } from '../../../shared/types';
+import { HIGHLIGHT_COLORS, type Position } from '../../../shared/types';
 import { Spinner } from '../components/ui';
 import { cx } from '../util';
 import type { PageTheme, ReaderHandle, ReaderProps, TocItem } from './types';
 import { positionKey } from './types';
+import { rectOf } from './selection';
 
 const THEMES: Record<PageTheme, { color: string; background: string; link: string }> = {
   light: { color: '#1f2328', background: '#ffffff', link: '#3b5bdb' },
@@ -34,7 +35,7 @@ function flattenToc(items: NavItemLike[], depth = 0, out: TocItem[] = []): TocIt
 const baseName = (href: string) => href.split('#')[0].split('/').pop() ?? href;
 
 export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubReader(
-  { book: info, data, target, prefs, onNavigate, onMeta, onError, cues },
+  { book: info, data, target, prefs, onNavigate, onMeta, onError, onSelection, cues, highlights },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -47,10 +48,13 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
   const lastKey = useRef<string | null>(null);
   const userNavPending = useRef(false);
   const currentLocation = useRef<EpubLocation | null>(null);
-  const highlighted = useRef<string | null>(null);
+  /** The live selection cue: ours when we lead, the reader's when we follow. */
+  const sharedSelection = useRef<string | null>(null);
+  /** Saved highlights currently drawn: id -> CFI range. */
+  const drawn = useRef(new Map<string, string>());
 
-  const latest = useRef({ target, onNavigate, onMeta, cues, toc });
-  latest.current = { target, onNavigate, onMeta, cues, toc };
+  const latest = useRef({ target, onNavigate, onMeta, onSelection, cues, toc });
+  latest.current = { target, onNavigate, onMeta, onSelection, cues, toc };
 
   const chapterFor = (href: string) => {
     const name = baseName(href);
@@ -85,7 +89,10 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
     const position = describe(location);
     lastKey.current = `${latest.current.target.version}|${positionKey(position)}`;
     latest.current.onNavigate({ position, scrollOnly: false });
-    if (latest.current.cues.canSend && highlighted.current) latest.current.cues.sendHighlight(null);
+    if (latest.current.cues.canSend && sharedSelection.current) {
+      sharedSelection.current = null;
+      latest.current.cues.sendSelection(null);
+    }
   };
 
   // Open the book and create the rendition.
@@ -116,18 +123,60 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
     rendition.on('relocated', (location: EpubLocation) => {
       currentLocation.current = location;
       updateMeta(location);
+      latest.current.onSelection(null);
       if (userNavPending.current) {
         userNavPending.current = false;
         reportUserNavigation();
       }
     });
 
-    rendition.on('selected', (cfiRange: string) => {
+    // epub.js reports a selection once it stops changing for a moment, which can be mid-drag.
+    // Hold it until the mouse/finger is released so highlights cover the whole selection.
+    let pressed = false;
+    let pending: { cfiRange: string; contents: { window: Window } } | null = null;
+
+    const reportSelection = (cfiRange: string, contents: { window: Window }) => {
       if (latest.current.cues.canSend) {
-        highlighted.current = cfiRange;
-        latest.current.cues.sendHighlight(cfiRange);
+        sharedSelection.current = cfiRange;
+        latest.current.cues.sendSelection(cfiRange);
       }
+      // The selection lives inside the book's iframe; translate its position to the page.
+      const range = rendition.getRange(cfiRange) as Range | null;
+      const frame = (contents.window.frameElement as HTMLElement | null)?.getBoundingClientRect();
+      if (!range || !range.toString().trim()) return;
+      latest.current.onSelection({
+        text: range.toString(),
+        rect: rectOf(range, { x: frame?.left ?? 0, y: frame?.top ?? 0 }),
+        anchor: { kind: 'cfi', cfiRange },
+        label: (currentLocation.current && chapterFor(currentLocation.current.start.href)) || '',
+        clear: () => contents.window.getSelection()?.removeAllRanges(),
+      });
+    };
+
+    rendition.on('selected', (cfiRange: string, contents: { window: Window }) => {
+      if (pressed) pending = { cfiRange, contents };
+      else reportSelection(cfiRange, contents);
     });
+    const press = () => {
+      pressed = true;
+      pending = null;
+      latest.current.onSelection(null);
+    };
+    const release = () => {
+      pressed = false;
+      // Give epub.js a moment to report the final selection, then pass it on.
+      setTimeout(() => {
+        if (pending && !pressed) {
+          const { cfiRange, contents } = pending;
+          pending = null;
+          reportSelection(cfiRange, contents);
+        }
+      }, 300);
+    };
+    rendition.on('mousedown', press);
+    rendition.on('touchstart', press);
+    rendition.on('mouseup', release);
+    rendition.on('touchend', release);
 
     // Arrow keys while the book iframe has focus.
     rendition.on('keyup', (e: KeyboardEvent) => {
@@ -189,6 +238,19 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
       userNavPending.current = true;
       void renditionRef.current.display(item.href);
     },
+    goToHighlight: (h) => {
+      if (h.anchor.kind !== 'cfi' || !renditionRef.current) return;
+      let start = h.anchor.cfiRange;
+      try {
+        const cfi = new EpubCFI(h.anchor.cfiRange);
+        cfi.collapse(true);
+        start = cfi.toString();
+      } catch {
+        /* use the range as is */
+      }
+      userNavPending.current = true;
+      void renditionRef.current.display(start);
+    },
   }));
 
   // Follow the target position.
@@ -218,33 +280,76 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toc, locationsReady]);
 
-  // Show the reader's text selection to everyone following.
+  // Underline the reader's current text selection for everyone following.
   useEffect(() => {
     const rendition = renditionRef.current;
-    if (!rendition || !ready) return;
-    const incoming = cues.highlight && cues.highlight.bookId === info.id ? cues.highlight.cfiRange : null;
-    if (cues.canSend) return;
-    const previous = highlighted.current;
+    if (!rendition || !ready || cues.canSend) return;
+    const incoming = cues.selection && cues.selection.bookId === info.id ? cues.selection.cfiRange : null;
+    const previous = sharedSelection.current;
     if (previous && previous !== incoming) {
       try {
-        rendition.annotations.remove(previous, 'highlight');
+        rendition.annotations.remove(previous, 'underline');
       } catch {
         /* not rendered */
       }
     }
-    highlighted.current = incoming;
+    sharedSelection.current = incoming;
     if (incoming && incoming !== previous) {
       try {
-        rendition.annotations.highlight(incoming, {}, () => {}, 'rr-highlight', {
-          fill: '#ffd43b',
-          'fill-opacity': '0.45',
-          'mix-blend-mode': 'multiply',
-        });
+        rendition.annotations.underline(incoming, {}, () => {}, 'rr-selection', { stroke: '#f08c00', 'stroke-width': '2' });
       } catch {
         /* range not visible */
       }
     }
-  }, [cues.highlight, cues.canSend, ready, info.id]);
+  }, [cues.selection, cues.canSend, ready, info.id]);
+
+  // Saved highlights. Redrawn when the page colour changes so they stay readable.
+  useEffect(() => {
+    const rendition = renditionRef.current;
+    if (!rendition || !ready) return;
+    const wanted = new Map(
+      highlights.items.flatMap((h) => (h.anchor.kind === 'cfi' ? [[h.id, { range: h.anchor.cfiRange, color: h.color }] as const] : [])),
+    );
+    const remove = (id: string) => {
+      try {
+        rendition.annotations.remove(drawn.current.get(id)!, 'highlight');
+      } catch {
+        /* not rendered */
+      }
+      drawn.current.delete(id);
+    };
+    for (const id of [...drawn.current.keys()]) if (!wanted.has(id)) remove(id);
+    const dark = prefs.theme === 'dark';
+    for (const [id, { range, color }] of wanted) {
+      if (drawn.current.has(id)) continue;
+      try {
+        rendition.annotations.highlight(range, { id }, () => {}, 'rr-mark', {
+          fill: HIGHLIGHT_COLORS[color].css,
+          'fill-opacity': dark ? '0.3' : '0.45',
+          'mix-blend-mode': dark ? 'normal' : 'multiply',
+        });
+        drawn.current.set(id, range);
+      } catch {
+        /* invalid range */
+      }
+    }
+  }, [highlights.items, ready, prefs.theme]);
+
+  useEffect(() => {
+    // Theme change: drop everything so the effect above redraws with matching colours.
+    const rendition = renditionRef.current;
+    return () => {
+      if (!rendition) return;
+      for (const range of drawn.current.values()) {
+        try {
+          rendition.annotations.remove(range, 'highlight');
+        } catch {
+          /* gone */
+        }
+      }
+      drawn.current.clear();
+    };
+  }, [prefs.theme, ready]);
 
   return (
     <div className={cx('epub-wrap', `page-theme-${prefs.theme}`)}>

@@ -6,6 +6,7 @@ import { api } from '../api';
 import { Toggle } from '../components/ui';
 import { useToast } from '../components/Toasts';
 import { navigate } from '../router';
+import { useSession } from '../session';
 import { loadPref, savePref } from '../util';
 import type { RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
@@ -13,9 +14,10 @@ import type { RoomApi } from './useRoom';
 export interface PersonalPrefs {
   sound: boolean;
   notify: boolean;
+  dictionary: boolean;
 }
 
-export const DEFAULT_PERSONAL: PersonalPrefs = { sound: true, notify: false };
+export const DEFAULT_PERSONAL: PersonalPrefs = { sound: true, notify: false, dictionary: true };
 
 export function usePersonalPrefs() {
   const [prefs, setPrefs] = useState<PersonalPrefs>(() => loadPref('personal', DEFAULT_PERSONAL));
@@ -42,6 +44,7 @@ export function SettingsPanel({
   updatePersonal: (patch: Partial<PersonalPrefs>) => void;
 }) {
   const toast = useToast();
+  const { config } = useSession();
   const { moderate } = room.actions;
   const [name, setName] = useState(state.name);
   const [description, setDescription] = useState(state.description);
@@ -99,8 +102,16 @@ export function SettingsPanel({
 
       <section className="panel-section">
         <h3 className="section-title">
-          <Bell size={14} aria-hidden /> Your alerts
+          <Bell size={14} aria-hidden /> Just for you
         </h3>
+        {config.dictionary && (
+          <Toggle
+            checked={personal.dictionary}
+            onChange={(v) => updatePersonal({ dictionary: v })}
+            label="Define words I select"
+            hint={`Select a word in the book to see its meaning (${config.dictionary === 'oxford' ? 'Oxford Dictionaries' : 'free dictionary'}, with a link to Oxford).`}
+          />
+        )}
         <Toggle checked={personal.sound} onChange={(v) => updatePersonal({ sound: v })} label="Play a sound when it's my turn" />
         {'Notification' in window && (
           <Toggle

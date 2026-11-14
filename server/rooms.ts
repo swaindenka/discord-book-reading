@@ -5,8 +5,14 @@ import type { UserCache } from './auth.js';
 import type { BookStorage } from './storage.js';
 import * as turns from './turns.js';
 import {
+  HIGHLIGHT_COLORS,
+  HIGHLIGHT_LIMITS,
   LIMITS,
+  type BookFormat,
+  type BookHighlight,
   type ChatMessage,
+  type HighlightAnchor,
+  type HighlightColor,
   type ClientToServerEvents,
   type MemberInfo,
   type MemberRole,
@@ -66,6 +72,40 @@ export function validatePosition(value: unknown): Position | null {
   return null;
 }
 
+const unit = (n: number) => Number.isFinite(n) && n >= -0.001 && n <= 1.001;
+const round4 = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 10000) / 10000;
+
+/** Checks a highlight anchor sent by a client against the book's format. */
+export function validateAnchor(value: unknown, format: BookFormat): HighlightAnchor | null {
+  if (!value || typeof value !== 'object') return null;
+  const a = value as Record<string, unknown>;
+  const page = Number(a.page);
+  const validPage = Number.isInteger(page) && page >= 1 && page <= 1_000_000;
+  if (format === 'epub') {
+    if (a.kind !== 'cfi' || typeof a.cfiRange !== 'string' || !a.cfiRange.startsWith('epubcfi(') || a.cfiRange.length > 2000) {
+      return null;
+    }
+    return { kind: 'cfi', cfiRange: a.cfiRange };
+  }
+  if (format === 'pdf' || format === 'cbz') {
+    if (a.kind !== 'rects' || !validPage || !Array.isArray(a.rects)) return null;
+    if (a.rects.length === 0 || a.rects.length > HIGHLIGHT_LIMITS.rects) return null;
+    const rects: [number, number, number, number][] = [];
+    for (const r of a.rects) {
+      if (!Array.isArray(r) || r.length !== 4 || !r.every((n) => typeof n === 'number' && unit(n))) return null;
+      const [x, y, w, h] = r.map(round4);
+      if (w <= 0 || h <= 0) return null;
+      rects.push([x, y, Math.min(w, 1 - x), Math.min(h, 1 - y)]);
+    }
+    return { kind: 'rects', page, rects };
+  }
+  const start = Number(a.start);
+  const end = Number(a.end);
+  if (a.kind !== 'text' || !validPage || !Number.isInteger(start) || !Number.isInteger(end)) return null;
+  if (start < 0 || end <= start || end - start > 50_000) return null;
+  return { kind: 'text', page, start, end };
+}
+
 function describeProgress(start: Position | null, end: Position | null): string {
   if (!end) return '';
   if (end.kind === 'page' && (!start || start.kind === 'page')) {
@@ -102,6 +142,8 @@ export class LiveRoom {
   private unloadTimer: NodeJS.Timeout | null = null;
   private turnStartPosition: Position | null = null;
   private chatLog = new Map<string, number[]>();
+  /** Highlights per book, loaded on first use. */
+  private highlightCache = new Map<string, BookHighlight[]>();
   private messageCount = 0;
   deleted = false;
 
@@ -455,6 +497,65 @@ export class LiveRoom {
     return valid;
   }
 
+  // ---- highlights (moderators) --------------------------------------------------
+
+  async highlightsFor(bookId: string | null | undefined): Promise<BookHighlight[]> {
+    if (!bookId) return [];
+    let list = this.highlightCache.get(bookId);
+    if (!list) {
+      list = await this.ctx.db.listHighlights(bookId);
+      this.highlightCache.set(bookId, list);
+    }
+    return list;
+  }
+
+  private async announceHighlights() {
+    const bookId = this.record.activeBookId;
+    if (!bookId) return;
+    this.ctx.io.to(channel(this.id)).emit('highlights:set', { bookId, highlights: await this.highlightsFor(bookId) });
+  }
+
+  async addHighlight(user: UserRecord, payload: Record<string, unknown> | undefined): Promise<BookHighlight> {
+    if (!this.isMod(user.id)) throw new UserError('Only moderators can highlight.');
+    const book = this.activeBook;
+    if (!book || book.id !== payload?.bookId) throw new UserError('That book is not open in this room.');
+    const color = String(payload.color) as HighlightColor;
+    if (!(color in HIGHLIGHT_COLORS)) throw new UserError('Unknown highlight colour.');
+    const anchor = validateAnchor(payload.anchor, book.format);
+    if (!anchor) throw new UserError('Invalid highlight.');
+    const list = await this.highlightsFor(book.id);
+    if (list.length >= HIGHLIGHT_LIMITS.perBook) throw new UserError('This book has too many highlights already.');
+    const clean = (v: unknown, max: number) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+    const highlight: BookHighlight = {
+      id: newId(),
+      bookId: book.id,
+      color,
+      anchor,
+      text: clean(payload.text, HIGHLIGHT_LIMITS.text),
+      label: clean(payload.label, 120) || (anchor.kind === 'cfi' ? '' : `Page ${anchor.page}`),
+      createdBy: user.id,
+      createdByName: user.displayName,
+      createdAt: Date.now(),
+    };
+    await this.ctx.db.addHighlight(this.id, highlight);
+    list.push(highlight);
+    this.ctx.io.to(channel(this.id)).emit('highlight:added', highlight);
+    return highlight;
+  }
+
+  async removeHighlight(user: UserRecord, id: unknown) {
+    if (!this.isMod(user.id)) throw new UserError('Only moderators can remove highlights.');
+    for (const [bookId, list] of this.highlightCache) {
+      const index = list.findIndex((h) => h.id === id);
+      if (index < 0) continue;
+      await this.ctx.db.deleteHighlight(list[index].id);
+      list.splice(index, 1);
+      this.ctx.io.to(channel(this.id)).emit('highlight:removed', { id: String(id), bookId });
+      return;
+    }
+    throw new UserError('That highlight no longer exists.');
+  }
+
   // ---- chat ----------------------------------------------------------------
 
   async chat(user: UserRecord, rawBody: unknown) {
@@ -507,8 +608,10 @@ export class LiveRoom {
     this.books = this.books.filter((b) => b.id !== bookId);
     if (this.record.activeBookId === bookId) this.record.activeBookId = this.books.at(-1)?.id ?? null;
     await this.ctx.db.deleteBook(bookId);
+    this.highlightCache.delete(bookId);
     await this.ctx.storage.remove(book.storageKey).catch((err) => console.error('[room] file removal failed', err));
     this.changed();
+    await this.announceHighlights();
     await this.systemMessage(`${user.displayName} removed “${book.title}”.`);
   }
 
@@ -631,6 +734,7 @@ export class LiveRoom {
         await this.flush();
         this.record.activeBookId = book.id;
         this.turnStartPosition = book.position;
+        await this.announceHighlights();
         await this.systemMessage(`${actor.displayName} switched the book to “${book.title}”.`);
         break;
       }
@@ -769,6 +873,11 @@ export class RoomManager {
     }
     // Rooms with people in them first.
     return out.sort((a, b) => b.online.length - a.online.length);
+  }
+
+  /** Re-sends every live room's state, e.g. after site admins change. */
+  broadcastAll() {
+    for (const room of this.live.values()) room.broadcast();
   }
 
   async flushAll() {
