@@ -127,6 +127,26 @@ export function SettingsPanel({
         <>
           <section className="panel-section">
             <h3 className="section-title">Reading order</h3>
+            <label className="field inline">
+              <span>
+                Suggested turn length
+                <span className="muted small block">Shows a timer and nudges the reader when time is up.</span>
+              </span>
+              <select
+                className="input"
+                value={settings.turnMinutes}
+                onChange={(e) => moderate({ type: 'settings', settings: { turnMinutes: Number(e.target.value) } })}
+              >
+                {[0, 5, 10, 15, 20, 30, 45, 60].map((m) => (
+                  <option key={m} value={m}>
+                    {m === 0 ? 'No limit' : `${m} minutes`}
+                  </option>
+                ))}
+                {![0, 5, 10, 15, 20, 30, 45, 60].includes(settings.turnMinutes) && (
+                  <option value={settings.turnMinutes}>{settings.turnMinutes} minutes</option>
+                )}
+              </select>
+            </label>
             <Toggle
               checked={settings.rotate}
               onChange={(v) => moderate({ type: 'settings', settings: { rotate: v } })}

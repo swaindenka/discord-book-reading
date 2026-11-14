@@ -29,6 +29,7 @@ export function formatFromFilename(name: string): BookFormat | null {
 
 export const LIMITS = {
   roomName: 60,
+  bookAuthor: 100,
   roomDescription: 280,
   bookTitle: 120,
   chatMessage: 1000,
@@ -89,6 +90,7 @@ export interface MemberInfo {
 export interface BookInfo {
   id: string;
   title: string;
+  author: string | null;
   format: BookFormat;
   size: number;
   uploadedBy: string;
@@ -105,6 +107,8 @@ export interface RoomSettings {
   /** Skip the reader automatically if they stay disconnected for `offlineGraceSeconds`. */
   autoSkipOffline: boolean;
   offlineGraceSeconds: number;
+  /** Suggested minutes per turn (0 = no limit). Readers get a gentle reminder; nobody is cut off. */
+  turnMinutes: number;
 }
 
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
@@ -112,6 +116,7 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   queueLocked: false,
   autoSkipOffline: true,
   offlineGraceSeconds: 60,
+  turnMinutes: 0,
 };
 
 export interface RoomState {
@@ -139,7 +144,9 @@ export interface RoomSummary {
   description: string;
   ownerName: string;
   bookTitle: string | null;
+  bookAuthor: string | null;
   bookFormat: BookFormat | null;
+  bookPosition: Position | null;
   bookCount: number;
   online: { name: string; avatarUrl: string | null }[];
   readerName: string | null;
@@ -253,7 +260,8 @@ export type ModAction =
   | { type: 'member.kick'; userId: string }
   | { type: 'member.ban'; userId: string }
   | { type: 'member.unban'; userId: string }
-  | { type: 'book.activate'; bookId: string };
+  | { type: 'book.activate'; bookId: string }
+  | { type: 'book.update'; bookId: string; title: string; author: string };
 
 export type AckResult<T extends object = object> = ({ ok: true } & T) | { ok: false; error: string };
 export type Ack<T extends object = object> = (result: AckResult<T>) => void;

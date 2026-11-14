@@ -14,6 +14,8 @@ Read books together with your Discord server. Instead of one person screen-shari
 - **Moderation** – the person who creates the room (and uploads the book) is its owner. Owners and moderators can reorder the queue (drag and drop), hand the turn to someone, skip or pause the reader, lock or shuffle the queue, add moderators, kick or ban people, and manage the room's library.
 - **Chat** – room chat with history. Turn changes are logged in the chat, and you get a sound and an optional desktop notification when it's your turn.
 - **Saved progress** – each book remembers where the group stopped, so next week's session picks up from there.
+- **Clean book names** – titles and authors are read from the book's own metadata, or tidied up from download file names (`Title -- Author -- … -- Anna's Archive.pdf` becomes *Title* by *Author*). Moderators can edit both in the library.
+- **Turn timer** – moderators can set a suggested turn length. Everyone sees the timer, and the reader gets a gentle nudge when time is up; nobody is cut off.
 
 ![The same room with the chat open](docs/images/room-chat.jpg)
 

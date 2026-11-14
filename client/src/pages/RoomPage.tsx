@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Eye,
   LibraryBig,
+  Link2,
   ListOrdered,
   LocateFixed,
   MessageSquare,
@@ -137,6 +138,16 @@ export function RoomPage({ roomId }: { roomId: string }) {
     [activeBook, controller, following, room],
   );
 
+  const copyInvite = async () => {
+    const url = `${window.location.origin}/room/${roomId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.show('Invite link copied. Paste it in Discord.', 'success');
+    } catch {
+      window.prompt('Copy this link:', url);
+    }
+  };
+
   const backToGroup = () => {
     setFollowing(true);
     setLocalPosition(null);
@@ -228,7 +239,15 @@ export function RoomPage({ roomId }: { roomId: string }) {
         <div className="room-title">
           <h1 className="clamp-1">{state.name}</h1>
           <span className="muted small clamp-1">
-            {activeBook ? activeBook.title : 'No book open'} · <Users size={12} aria-hidden /> {state.members.length} here
+            {activeBook
+              ? activeBook.title.toLowerCase() === state.name.toLowerCase()
+                ? activeBook.author
+                  ? `by ${activeBook.author}`
+                  : `${activeBook.format.toUpperCase()} book`
+                : [activeBook.title, activeBook.author].filter(Boolean).join(' — ')
+              : 'No book open'}{' '}
+            ·{' '}
+            <Users size={12} aria-hidden /> {state.members.length} here
           </span>
         </div>
         {!room.connected && (
@@ -236,6 +255,9 @@ export function RoomPage({ roomId }: { roomId: string }) {
             <WifiOff size={14} aria-hidden /> Reconnecting…
           </span>
         )}
+        <button className="icon-btn ghost" onClick={copyInvite} aria-label="Copy invite link" title="Copy invite link for Discord">
+          <Link2 size={18} />
+        </button>
         <button
           className="icon-btn ghost sidebar-toggle"
           onClick={() => {

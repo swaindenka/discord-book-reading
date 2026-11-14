@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { BookOpen, Mic, Plus, RefreshCw, Users } from 'lucide-react';
 import type { RoomSummary } from '../../../shared/types';
 import { BOOK_FORMATS, LIMITS, formatFromFilename } from '../../../shared/types';
 import { api } from '../api';
 import { AppHeader } from '../components/AppHeader';
 import { Avatar, FileDrop, Modal, ProgressBar, Spinner } from '../components/ui';
+import { BookFields, useBookDetails } from '../components/BookFields';
+import { parseBookFilename } from '../../../shared/bookname';
 import { useToast } from '../components/Toasts';
 import { Link, navigate, useDocumentTitle } from '../router';
+import { progressLabel } from '../util';
 import { useSession } from '../session';
-
-function titleFromFile(file: File) {
-  return file.name
-    .replace(/\.[^.]+$/, '')
-    .replace(/[_]+/g, ' ')
-    .trim();
-}
 
 function CreateRoomDialog({ onClose }: { onClose: () => void }) {
   const { config } = useSession();
@@ -22,7 +18,8 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState<File | null>(null);
-  const [title, setTitle] = useState('');
+  const details = useBookDetails();
+  const nameTouched = useRef(false);
   const [progress, setProgress] = useState<number | null>(null);
 
   const chooseFile = (next: File | null) => {
@@ -35,10 +32,11 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     setFile(next);
-    if (next) {
-      setTitle(titleFromFile(next));
-      if (!name) setName(titleFromFile(next).slice(0, LIMITS.roomName));
-    }
+    // Suggest the book's title as the room name until the user types their own.
+    if (next && !nameTouched.current) setName(parseBookFilename(next.name).title.slice(0, LIMITS.roomName));
+    void details.load(next).then((info) => {
+      if (info && !nameTouched.current) setName(info.title.slice(0, LIMITS.roomName));
+    });
   };
 
   const submit = async (e: FormEvent) => {
@@ -47,7 +45,8 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
     form.set('name', name);
     form.set('description', description);
     if (file) {
-      form.set('title', title);
+      form.set('title', details.title);
+      form.set('author', details.author);
       form.set('file', file);
     }
     setProgress(0);
@@ -65,12 +64,7 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
     <Modal title="Start a reading room" onClose={busy ? () => {} : onClose}>
       <form className="form" onSubmit={submit}>
         <FileDrop file={file} onFile={chooseFile} maxMb={config.maxUploadMb} />
-        {file && (
-          <label className="field">
-            <span>Book title</span>
-            <input className="input" value={title} maxLength={LIMITS.bookTitle} onChange={(e) => setTitle(e.target.value)} />
-          </label>
-        )}
+        {file && <BookFields details={details} />}
         <label className="field">
           <span>Room name</span>
           <input
@@ -79,7 +73,10 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
             required
             maxLength={LIMITS.roomName}
             placeholder="Friday night book club"
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              nameTouched.current = true;
+              setName(e.target.value);
+            }}
           />
         </label>
         <label className="field">
@@ -127,12 +124,20 @@ function RoomCard({ room }: { room: RoomSummary }) {
           </span>
         )}
       </div>
-      <h3>{room.name}</h3>
+      <h3 className="clamp-2">{room.name}</h3>
       {room.bookTitle && (
-        <p className="room-card-book">
-          <BookOpen size={14} aria-hidden /> {room.bookTitle}
-          {room.bookCount > 1 && <span className="muted"> · +{room.bookCount - 1} more</span>}
-        </p>
+        <div className="room-card-book">
+          <BookOpen size={14} aria-hidden />
+          <span>
+            {/* Don't repeat the title when the room is named after the book. */}
+            {room.bookTitle.toLowerCase() !== room.name.toLowerCase() && <span className="clamp-2">{room.bookTitle}</span>}
+            <span className="muted">
+              {[room.bookAuthor, progressLabel(room.bookPosition) && `at ${progressLabel(room.bookPosition)}`, room.bookCount > 1 && `+${room.bookCount - 1} more`]
+                .filter(Boolean)
+                .join(' · ') || 'Not started yet'}
+            </span>
+          </span>
+        </div>
       )}
       {room.description && <p className="muted small clamp-2">{room.description}</p>}
       <div className="room-card-footer">
