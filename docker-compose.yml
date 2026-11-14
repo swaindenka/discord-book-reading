@@ -1,0 +1,39 @@
+# Self-hosting on any VPS (e.g. an Oracle Cloud "Always Free" VM).
+#   1. Point a domain (or a free DuckDNS name) at the server's IP.
+#   2. cp .env.example .env  and fill in DOMAIN, PUBLIC_URL, SESSION_SECRET and the Discord values.
+#   3. docker compose up -d --build
+# Caddy fetches and renews the HTTPS certificate automatically.
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_DIR: /app/data
+    volumes:
+      - app-data:/app/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,33 @@
+# Render Blueprint: New → Blueprint → pick this repository.
+# Free web services sleep after 15 minutes without traffic and have no persistent disk,
+# so point DATABASE_URL at a free Turso database: books and progress are stored there.
+services:
+  - type: web
+    name: reading-room
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_ADMIN_ROLE_IDS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_AUTH_TOKEN
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "50"

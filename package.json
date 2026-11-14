@@ -1,0 +1,55 @@
+{
+  "name": "reading-room",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Read books together: synced PDF/EPUB reader with Discord login, a turn queue, moderation and chat.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c blue,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch --clear-screen=false server/index.ts",
+    "dev:client": "vite",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "node dist/server/server/index.js",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "multer": "^2.5.0",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "concurrently": "^10.0.7",
+    "dompurify": "^3.4.17",
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.2",
+    "lucide-react": "^1.73.0",
+    "marked": "^18.2.0",
+    "pdfjs-dist": "^6.5.438",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.8",
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "^0.9.12"
+  }
+}
