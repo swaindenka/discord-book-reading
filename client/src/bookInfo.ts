@@ -16,8 +16,8 @@ async function epubMetadata(file: File): Promise<Partial<BookName>> {
 }
 
 async function pdfMetadata(file: File): Promise<Partial<BookName>> {
-  const pdfjs = await import('pdfjs-dist');
-  const { default: workerUrl } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const { default: workerUrl } = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), disableAutoFetch: true });
   try {
