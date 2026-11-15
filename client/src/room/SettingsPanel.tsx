@@ -10,6 +10,7 @@ import { useSession } from '../session';
 import { loadPref, savePref } from '../util';
 import type { RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
+import { DiscordSettings, ScheduleSettings } from './CommunitySettings';
 
 export interface PersonalPrefs {
   sound: boolean;
@@ -185,6 +186,9 @@ export function SettingsPanel({
               </label>
             )}
           </section>
+
+          <ScheduleSettings state={state} room={room} />
+          <DiscordSettings state={state} room={room} />
 
           <section className="panel-section">
             <h3 className="section-title">Room details</h3>

@@ -38,7 +38,7 @@ async function resolveOutline(doc: PDFDocumentProxy): Promise<TocItem[]> {
 }
 
 export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReader(
-  { book, data, target, prefs, onNavigate, onMeta, onError, onSelection, cues, highlights },
+  { book, data, src, target, prefs, onNavigate, onMeta, onError, onSelection, cues, highlights },
   ref,
 ) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -48,6 +48,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null);
   const [toc, setToc] = useState<TocItem[]>([]);
+  const [loadProgress, setLoadProgress] = useState(0);
   const size = useElementSize(scrollRef);
   const pageCount = doc?.numPages ?? 0;
   const { page, goToPage, markRendered, onScroll } = usePagedSync({ pageCount, target, onNavigate, scrollRef });
@@ -82,8 +83,12 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
 
   // Load the document. pdf.js takes ownership of the buffer, so hand it a copy.
   useEffect(() => {
+    const source = data.byteLength
+      ? { data: new Uint8Array(data.slice(0)) }
+      : // Stream: only the parts of the file needed for the current page are downloaded.
+        { url: src, withCredentials: true, rangeChunkSize: 256 * 1024, disableAutoFetch: true, disableStream: true };
     const task = pdfjs.getDocument({
-      data: new Uint8Array(data.slice(0)),
+      ...source,
       cMapUrl: '/pdfjs/cmaps/',
       cMapPacked: true,
       standardFontDataUrl: '/pdfjs/standard_fonts/',
@@ -92,6 +97,9 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
       enableXfa: false,
     });
     let alive = true;
+    task.onProgress = ({ loaded, total }: { loaded: number; total: number }) => {
+      if (alive && total) setLoadProgress(Math.min(1, loaded / total));
+    };
     task.promise.then(
       (loaded) => {
         if (!alive) return;
@@ -104,7 +112,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
       alive = false;
       void task.destroy();
     };
-  }, [data, onError]);
+  }, [data, src, onError]);
 
   useEffect(() => {
     if (pageCount) onMeta({ label: `Page ${page} of ${pageCount}`, page, pageCount, toc });
@@ -167,7 +175,7 @@ export const PdfReader = forwardRef<ReaderHandle, ReaderProps>(function PdfReade
 
   return (
     <div className={cx('paged-scroll', `page-theme-${prefs.theme}`)} ref={scrollRef} onScroll={onScroll}>
-      {!doc && <Spinner label="Opening PDF…" />}
+      {!doc && <Spinner label={loadProgress ? `Opening PDF… ${Math.round(loadProgress * 100)}%` : 'Opening PDF…'} />}
       <PointerSurface
         page={page}
         cues={cues}

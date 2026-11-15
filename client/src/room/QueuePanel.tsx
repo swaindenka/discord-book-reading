@@ -12,6 +12,7 @@ import {
   LockOpen,
   Mic,
   Pause,
+  Scale,
   Shield,
   ShieldOff,
   Shuffle,
@@ -24,6 +25,7 @@ import { Avatar, Menu, MenuItem, RoleBadge } from '../components/ui';
 import { cx, formatDuration } from '../util';
 import { RANK, useNow, type RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
+import { ReadingStats } from './ReadingStats';
 
 function MemberActions({
   member,
@@ -240,6 +242,15 @@ export function QueuePanel({ state, view, room }: { state: RoomState; view: Room
               </button>
               <button
                 className="icon-btn ghost"
+                title="Least-read first: order the queue by reading time on this book"
+                aria-label="Order queue by least reading time"
+                disabled={state.queue.length < 2}
+                onClick={() => moderate({ type: 'queue.fair' })}
+              >
+                <Scale size={15} />
+              </button>
+              <button
+                className="icon-btn ghost"
                 title="Shuffle queue"
                 aria-label="Shuffle queue"
                 disabled={state.queue.length < 2}
@@ -308,6 +319,8 @@ export function QueuePanel({ state, view, room }: { state: RoomState; view: Room
           </ul>
         )}
       </section>
+
+      <ReadingStats state={state} room={room} />
 
       {view.isMod && state.banned.length > 0 && (
         <section className="panel-section">

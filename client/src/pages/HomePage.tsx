@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { BookOpen, Mic, Plus, RefreshCw, Users } from 'lucide-react';
+import { BookOpen, CalendarClock, Mic, Plus, RefreshCw, Users } from 'lucide-react';
 import type { RoomSummary } from '../../../shared/types';
 import { BOOK_FORMATS, LIMITS, formatFromFilename } from '../../../shared/types';
 import { api } from '../api';
@@ -9,7 +9,8 @@ import { BookFields, useBookDetails } from '../components/BookFields';
 import { parseBookFilename } from '../../../shared/bookname';
 import { useToast } from '../components/Toasts';
 import { Link, navigate, useDocumentTitle } from '../router';
-import { progressLabel } from '../util';
+import { progressFraction, progressLabel } from '../util';
+import { formatSession, isUpcoming } from '../schedule';
 import { useSession } from '../session';
 
 function CreateRoomDialog({ onClose }: { onClose: () => void }) {
@@ -132,7 +133,7 @@ function RoomCard({ room }: { room: RoomSummary }) {
             {/* Don't repeat the title when the room is named after the book. */}
             {room.bookTitle.toLowerCase() !== room.name.toLowerCase() && <span className="clamp-2">{room.bookTitle}</span>}
             <span className="muted">
-              {[room.bookAuthor, progressLabel(room.bookPosition) && `at ${progressLabel(room.bookPosition)}`, room.bookCount > 1 && `+${room.bookCount - 1} more`]
+              {[room.bookAuthor, progressLabel(room.bookPosition, room.bookPageCount) && `at ${progressLabel(room.bookPosition, room.bookPageCount)}`, room.bookCount > 1 && `+${room.bookCount - 1} more`]
                 .filter(Boolean)
                 .join(' · ') || 'Not started yet'}
             </span>
@@ -140,6 +141,16 @@ function RoomCard({ room }: { room: RoomSummary }) {
         </div>
       )}
       {room.description && <p className="muted small clamp-2">{room.description}</p>}
+      {isUpcoming(room.nextSessionAt) && (
+        <p className="room-card-session small">
+          <CalendarClock size={13} aria-hidden /> Next: {formatSession(room.nextSessionAt)}
+        </p>
+      )}
+      {progressFraction(room.bookPosition, room.bookPageCount) !== null && (
+        <div className="mini-progress" aria-hidden>
+          <div style={{ width: `${progressFraction(room.bookPosition, room.bookPageCount)! * 100}%` }} />
+        </div>
+      )}
       <div className="room-card-footer">
         {room.readerName ? (
           <span className="small">

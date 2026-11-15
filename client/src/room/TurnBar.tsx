@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Check, Hand, LogOut, Mic, Play, SkipForward, UserPlus } from 'lucide-react';
+import { CalendarPlus, Check, Hand, LogOut, Mic, Play, SkipForward, UserPlus } from 'lucide-react';
+import { downloadCalendarInvite, formatSession, isUpcoming } from '../schedule';
 import type { RoomState } from '../../../shared/types';
 import { Avatar } from '../components/ui';
 import { cx, formatDuration } from '../util';
@@ -55,7 +56,27 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
           <div className="turn-text">
             <strong>Nobody is reading</strong>
             <span className="muted small">
-              {state.queue.length ? `${state.queue.length} waiting in line` : 'Join the queue to take a turn'}
+              {isUpcoming(state.settings.nextSessionAt) ? (
+                <>
+                  Next session: {formatSession(state.settings.nextSessionAt)}{' '}
+                  <button
+                    className="link-btn"
+                    onClick={() =>
+                      downloadCalendarInvite(
+                        state.settings.nextSessionAt!,
+                        `Reading: ${state.name}`,
+                        `${window.location.origin}/room/${state.id}`,
+                      )
+                    }
+                  >
+                    <CalendarPlus size={12} aria-hidden /> Add to calendar
+                  </button>
+                </>
+              ) : state.queue.length ? (
+                `${state.queue.length} waiting in line`
+              ) : (
+                'Join the queue to take a turn'
+              )}
             </span>
           </div>
         )}

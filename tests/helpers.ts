@@ -5,6 +5,7 @@ import path from 'node:path';
 import { io as ioClient, type Socket } from 'socket.io-client';
 import { config as baseConfig, type Config } from '../server/config.js';
 import { createApp } from '../server/app.js';
+import { SESSION_COOKIE, Signer } from '../server/auth.js';
 import { Database } from '../server/db.js';
 import { DatabaseStorage, LocalStorage } from '../server/storage.js';
 import type { AckResult, ClientToServerEvents, ServerToClientEvents } from '../shared/types.js';
@@ -62,6 +63,12 @@ export async function startServer(overrides: Overrides = {}, existing?: { dir: s
       });
       if (!res.ok) throw new Error(`login failed: ${res.status}`);
       return cookieHeader(res);
+    },
+    /** Signs in as a Discord-style user (numeric ID) without going through OAuth. */
+    async loginAs(id: string, name: string) {
+      await db.upsertUser({ id, username: name.toLowerCase(), displayName: name, avatarUrl: null, roleAdmin: false, isAdmin: false });
+      const signer = new Signer(config.sessionSecret);
+      return `${SESSION_COOKIE}=${signer.sign({ uid: id }, 3600)}`;
     },
     async connect(cookie: string): Promise<TestSocket> {
       const socket: TestSocket = ioClient(base, {

@@ -25,6 +25,7 @@ import { LibraryPanel } from '../room/LibraryPanel';
 import { QueuePanel } from '../room/QueuePanel';
 import { SettingsPanel, usePersonalPrefs } from '../room/SettingsPanel';
 import { TurnBar } from '../room/TurnBar';
+import { ReactionBar, ReactionLayer } from '../room/Reactions';
 import { perspective } from '../room/common';
 import { useRoom } from '../room/useRoom';
 import { Link, useDocumentTitle } from '../router';
@@ -285,6 +286,15 @@ export function RoomPage({ roomId }: { roomId: string }) {
               status={status}
               highlights={viewerHighlights}
               dictionary={Boolean(config.dictionary) && personal.dictionary}
+              onPageCount={(count) => {
+                if (activeBook.format !== 'epub' && activeBook.pageCount !== count) room.reportPages(activeBook.id, count);
+              }}
+              overlay={
+                <>
+                  <ReactionLayer reactions={room.reactions} />
+                  <ReactionBar onReact={room.sendReaction} />
+                </>
+              }
             />
           ) : (
             <div className="viewer-message">

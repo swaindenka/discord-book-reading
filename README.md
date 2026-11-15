@@ -16,6 +16,12 @@ Read books together with your Discord server. Instead of one person screen-shari
 - **Saved progress** – each book remembers where the group stopped, so next week's session picks up from there.
 - **Clean book names** – titles and authors are read from the book's own metadata, or tidied up from download file names (`Title -- Author -- … -- Anna's Archive.pdf` becomes *Title* by *Author*). Moderators can edit both in the library.
 - **Turn timer** – moderators can set a suggested turn length. Everyone sees the timer, and the reader gets a gentle nudge when time is up; nobody is cut off.
+- **Discord channel notifications** – connect a channel webhook and the room posts "reading has started", "it's your turn" (with an @mention ping for the next reader), book changes and the next session time to Discord.
+- **Reading stats and fair turns** – see who has read how long (this book or all books), who passed, and who hasn't read yet. Moderators can put whoever has read least at the front of the queue.
+- **Live reactions** – listeners can send 👏 ❤️ 😂 😮 😢 🔥, which float up over the page for everyone.
+- **Next session** – moderators set the date and time; everyone sees it in their own time zone and can add it to their calendar.
+- **Progress** – page counts and how far the group is (page 120 of 300, 40%) on room cards and in the library.
+- **Fast with big PDFs** – PDFs stream in pieces, so the first page shows before the whole file has downloaded.
 
 ![The same room with the chat open](docs/images/room-chat.jpg)
 

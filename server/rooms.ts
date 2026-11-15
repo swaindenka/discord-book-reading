@@ -3,6 +3,7 @@ import type { Server, Socket } from 'socket.io';
 import type { Database, BookRecord, RoomRecord, UserRecord } from './db.js';
 import type { UserCache } from './auth.js';
 import type { BookStorage } from './storage.js';
+import { escapeMarkdown, type Notifier } from './notifier.js';
 import * as turns from './turns.js';
 import {
   DEFAULT_ROOM_SETTINGS,
@@ -22,6 +23,9 @@ import {
   type RoomSettings,
   type RoomState,
   type RoomSummary,
+  type ReaderStat,
+  type Reaction,
+  REACTIONS,
   type ServerToClientEvents,
 } from '../shared/types.js';
 
@@ -127,8 +131,14 @@ interface RoomContext {
   db: Database;
   users: UserCache;
   storage: BookStorage;
+  notifier: Notifier;
   onUnload: (roomId: string) => void;
 }
+
+type TurnEndReason = 'finished' | 'passed' | 'skipped' | 'disconnected' | 'handed' | 'paused' | 'removed' | 'ended';
+
+/** A gap this long without anyone reading makes the next turn a new "session" for notifications. */
+const SESSION_GAP_MS = 30 * 60_000;
 
 export class LiveRoom {
   readonly turns: turns.TurnState;
@@ -146,6 +156,13 @@ export class LiveRoom {
   /** Highlights per book, loaded on first use. */
   private highlightCache = new Map<string, BookHighlight[]>();
   private messageCount = 0;
+  /** The turn being read right now, for the turn history. */
+  private activeTurn: { userId: string; startedAt: number; bookId: string | null } | null = null;
+  /** Why the current turn is ending; set just before the change is applied. */
+  private endReason: TurnEndReason | null = null;
+  /** When someone last finished a turn here (for "session started" notifications). */
+  lastTurnEndedAt: number | null = null;
+  private reactionLog = new Map<string, number[]>();
   deleted = false;
 
   constructor(
@@ -160,6 +177,9 @@ export class LiveRoom {
     };
     this.moderators = new Set(record.state.moderators);
     this.banned = new Set(record.state.banned);
+    if (this.turns.reader && this.turns.turnStartedAt) {
+      this.activeTurn = { userId: this.turns.reader, startedAt: this.turns.turnStartedAt, bookId: record.activeBookId };
+    }
   }
 
   get id() {
@@ -231,9 +251,11 @@ export class LiveRoom {
         uploadedByName: this.name(b.uploadedBy),
         createdAt: b.createdAt,
         position: b.position,
+        pageCount: b.pageCount,
       })),
       activeBookId: record.activeBookId,
       position: this.position,
+      webhookConnected: Boolean(record.webhookUrl),
       serverTime: Date.now(),
     };
   }
@@ -249,6 +271,8 @@ export class LiveRoom {
       bookAuthor: book?.author ?? null,
       bookFormat: book?.format ?? null,
       bookPosition: book?.position ?? null,
+      bookPageCount: book?.pageCount ?? null,
+      nextSessionAt: this.settings.nextSessionAt,
       bookCount: this.books.length,
       online: [...this.presence.keys()].slice(0, 8).map((id) => {
         const user = this.ctx.users.peek(id);
@@ -268,6 +292,7 @@ export class LiveRoom {
   }
 
   private changed() {
+    this.trackTurn();
     this.checkReaderPresence();
     this.scheduleSave();
     this.broadcast();
@@ -421,6 +446,140 @@ export class LiveRoom {
     this.graceTimer.unref();
   }
 
+  // ---- turn history & notifications -----------------------------------------
+
+  /** Notices when a turn ends or starts: records history and tells Discord. */
+  private trackTurn() {
+    const { reader, turnStartedAt } = this.turns;
+    const current = this.activeTurn;
+    const sameTurn = current && current.userId === reader && current.startedAt === turnStartedAt;
+    if (current && !sameTurn) {
+      const now = Date.now();
+      const reason = this.endReason ?? 'ended';
+      this.lastTurnEndedAt = now;
+      this.ctx.db
+        .addTurn({
+          id: newId(),
+          roomId: this.id,
+          bookId: current.bookId,
+          userId: current.userId,
+          userName: this.name(current.userId),
+          startedAt: current.startedAt,
+          endedAt: now,
+          reason,
+        })
+        .catch((err) => console.error(`[room ${this.id}] turn history failed`, err));
+    }
+    this.endReason = null;
+    if (reader && turnStartedAt && !sameTurn) {
+      const sessionStart = !this.lastTurnEndedAt || Date.now() - this.lastTurnEndedAt > SESSION_GAP_MS;
+      this.activeTurn = { userId: reader, startedAt: turnStartedAt, bookId: this.record.activeBookId };
+      this.notifyTurnStart(reader, sessionStart);
+    } else if (!reader) {
+      this.activeTurn = null;
+    }
+  }
+
+  private bookLine() {
+    const book = this.activeBook;
+    if (!book) return 'a new book';
+    return `*${escapeMarkdown(book.title)}*${book.author ? ` by ${escapeMarkdown(book.author)}` : ''}`;
+  }
+
+  /** "<@123>" (a real Discord ping) when allowed, otherwise the bold name. */
+  private mention(userId: string, mentions: string[]) {
+    if (this.settings.pingReaders && /^\d{15,22}$/.test(userId)) {
+      mentions.push(userId);
+      return `<@${userId}>`;
+    }
+    return `**${escapeMarkdown(this.name(userId))}**`;
+  }
+
+  private notify(content: string, mentionUserIds: string[] = []) {
+    const url = this.record.webhookUrl;
+    if (!url) return;
+    void this.ctx.notifier.send(url, { content, mentionUserIds }).then((error) => {
+      if (error) console.warn(`[room ${this.id}] Discord notification failed: ${error}`);
+    });
+  }
+
+  private notifyTurnStart(readerId: string, sessionStart: boolean) {
+    const room = `**${escapeMarkdown(this.record.name)}**`;
+    const mentions: string[] = [];
+    const link = this.ctx.notifier.roomLink(this.id);
+    if (sessionStart && this.settings.notifyStart) {
+      this.notify(
+        `📖 Reading has started in ${room}: ${this.bookLine()}. ${this.mention(readerId, mentions)} reads first. Join here: ${link}`,
+        mentions,
+      );
+    } else if (this.settings.notifyTurns) {
+      const next = this.turns.queue.find(this.isOnline);
+      this.notify(
+        `🎙️ ${this.mention(readerId, mentions)}, it's your turn to read in ${room}.` +
+          (next ? ` Up next: ${escapeMarkdown(this.name(next))}.` : '') +
+          ` ${link}`,
+        mentions,
+      );
+    }
+  }
+
+  /** Reading time per person (this book or the whole room), including the turn in progress. */
+  async stats(scope: 'book' | 'room'): Promise<ReaderStat[]> {
+    const bookId = scope === 'book' ? this.record.activeBookId : null;
+    if (scope === 'book' && !bookId) return [];
+    const rows = await this.ctx.db.turnStats(this.id, bookId);
+    const byUser = new Map(rows.map((r) => [r.userId, { ...r }]));
+    const live = this.activeTurn;
+    if (live && (scope === 'room' || live.bookId === bookId)) {
+      const row = byUser.get(live.userId) ?? { userId: live.userId, userName: this.name(live.userId), turns: 0, passes: 0, ms: 0, lastReadAt: null };
+      row.turns += 1;
+      row.ms += Date.now() - live.startedAt;
+      row.lastReadAt = Date.now();
+      byUser.set(live.userId, row);
+    }
+    await this.ctx.users.preload(byUser.keys());
+    return [...byUser.values()]
+      .map((r) => {
+        const user = this.ctx.users.peek(r.userId);
+        return {
+          userId: r.userId,
+          name: user?.displayName ?? r.userName,
+          avatarUrl: user?.avatarUrl ?? null,
+          turns: r.turns,
+          passes: r.passes,
+          seconds: Math.round(r.ms / 1000),
+          lastReadAt: r.lastReadAt,
+        };
+      })
+      .sort((a, b) => b.seconds - a.seconds);
+  }
+
+  // ---- reactions & book details ----------------------------------------------
+
+  /** Validates and rate-limits a live reaction; returns the emoji to broadcast. */
+  react(user: UserRecord, emoji: unknown): Reaction | null {
+    if (typeof emoji !== 'string' || !(REACTIONS as readonly string[]).includes(emoji)) return null;
+    const now = Date.now();
+    const recent = (this.reactionLog.get(user.id) ?? []).filter((t) => now - t < 5000);
+    if (recent.length >= 8 || (recent.length && now - recent[recent.length - 1] < 250)) return null;
+    recent.push(now);
+    this.reactionLog.set(user.id, recent);
+    return emoji as Reaction;
+  }
+
+  /** Stores how many pages a book has (reported by the first browser that opens it). */
+  async setPageCount(user: UserRecord, bookId: unknown, pageCount: unknown) {
+    const book = this.books.find((b) => b.id === bookId);
+    const count = Number(pageCount);
+    if (!book || book.format === 'epub' || !Number.isInteger(count) || count < 1 || count > 100_000) return;
+    if (book.pageCount === count) return;
+    // The first report wins; later corrections only from people who can steer the room.
+    if (book.pageCount !== null && !this.canControl(user.id)) return;
+    book.pageCount = count;
+    await this.ctx.db.setBookPageCount(book.id, count);
+    this.broadcast();
+  }
+
   // ---- turns ---------------------------------------------------------------
 
   private beginTurn(next: string | null) {
@@ -429,6 +588,7 @@ export class LiveRoom {
 
   private async advanceTurn(reason: 'finished' | 'passed' | 'skipped' | 'disconnected', actor?: UserRecord) {
     const endPosition = this.position;
+    this.endReason = reason;
     const { previous, next } = turns.advance(this.turns, {
       rotate: this.settings.rotate,
       isOnline: this.isOnline,
@@ -660,6 +820,35 @@ export class LiveRoom {
         turns.shuffleQueue(s);
         await this.systemMessage(`${actor.displayName} shuffled the queue.`);
         break;
+      case 'queue.fair': {
+        // Least reading time on this book first; ties keep their current order.
+        const seconds = new Map((await this.stats('book')).map((r) => [r.userId, r.seconds]));
+        const order = new Map(s.queue.map((id, i) => [id, i]));
+        s.queue.sort((a, b) => (seconds.get(a) ?? 0) - (seconds.get(b) ?? 0) || order.get(a)! - order.get(b)!);
+        await this.systemMessage(`${actor.displayName} put whoever has read least first in the queue.`);
+        break;
+      }
+      case 'webhook.set': {
+        const url = typeof action.url === 'string' ? action.url.trim() : '';
+        if (url && !this.ctx.notifier.isValidUrl(url)) {
+          throw new UserError('That is not a Discord webhook URL. Copy it from Channel settings → Integrations → Webhooks.');
+        }
+        this.record.webhookUrl = url || null;
+        await this.systemMessage(
+          url ? `${actor.displayName} connected Discord notifications.` : `${actor.displayName} turned off Discord notifications.`,
+        );
+        break;
+      }
+      case 'webhook.test': {
+        if (!this.record.webhookUrl) throw new UserError('Connect a Discord webhook first.');
+        const error = await this.ctx.notifier.send(
+          this.record.webhookUrl,
+          { content: `✅ Notifications from **${escapeMarkdown(this.record.name)}** will appear in this channel.` },
+          { force: true },
+        );
+        if (error) throw new UserError(`Discord didn't accept the test message: ${error}.`);
+        return;
+      }
       case 'queue.clear':
         s.queue.length = 0;
         await this.systemMessage(`${actor.displayName} cleared the queue.`);
@@ -667,6 +856,7 @@ export class LiveRoom {
       case 'reader.set': {
         if (!this.isOnline(targetId) && !s.queue.includes(targetId)) throw new UserError('That person is not here.');
         if (s.reader === targetId) throw new UserError('They are already reading.');
+        this.endReason = 'handed';
         turns.setReader(s, targetId, { rotate: this.settings.rotate, now });
         this.beginTurn(targetId);
         await this.systemMessage(`${actor.displayName} handed the turn to ${this.name(targetId)}.`);
@@ -677,6 +867,7 @@ export class LiveRoom {
         await this.advanceTurn('skipped', actor);
         return;
       case 'reader.stop': {
+        this.endReason = 'paused';
         const previous = turns.endTurn(s, 'front');
         if (!previous) throw new UserError('Nobody is reading.');
         await this.systemMessage(`${actor.displayName} paused ${this.name(previous)}'s turn.`);
@@ -719,6 +910,7 @@ export class LiveRoom {
           this.banned.add(targetId);
           this.moderators.delete(targetId);
         }
+        if (s.reader === targetId) this.endReason = 'removed';
         const { wasReader, next } = turns.removeUser(s, targetId, { isOnline: this.isOnline, now });
         if (wasReader) this.beginTurn(next);
         this.disconnectUser(targetId, banned);
@@ -752,6 +944,11 @@ export class LiveRoom {
         this.turnStartPosition = book.position;
         await this.announceHighlights();
         await this.systemMessage(`${actor.displayName} switched the book to “${book.title}”.`);
+        if (this.settings.notifyStart) {
+          this.notify(
+            `📚 **${escapeMarkdown(this.record.name)}** is now reading ${this.bookLine()}. ${this.ctx.notifier.roomLink(this.id)}`,
+          );
+        }
         break;
       }
       default:
@@ -763,8 +960,26 @@ export class LiveRoom {
   private applySettings(input: Partial<RoomSettings> | undefined) {
     if (!input || typeof input !== 'object') throw new UserError('Invalid settings.');
     const next = { ...this.settings };
-    for (const key of ['rotate', 'queueLocked', 'autoSkipOffline'] as const) {
+    for (const key of ['rotate', 'queueLocked', 'autoSkipOffline', 'notifyStart', 'notifyTurns', 'pingReaders'] as const) {
       if (typeof input[key] === 'boolean') next[key] = input[key];
+    }
+    if (input.nextSessionAt !== undefined) {
+      if (input.nextSessionAt === null) next.nextSessionAt = null;
+      else {
+        const at = Number(input.nextSessionAt);
+        const now = Date.now();
+        if (!Number.isFinite(at) || at < now - 3600_000 || at > now + 366 * 86_400_000) {
+          throw new UserError('Pick a session time within the next year.');
+        }
+        next.nextSessionAt = Math.round(at / 60_000) * 60_000;
+      }
+      if (next.nextSessionAt && next.nextSessionAt !== this.settings.nextSessionAt && next.notifyStart) {
+        // Discord shows <t:…> timestamps in each reader's own time zone.
+        const t = Math.round(next.nextSessionAt / 1000);
+        this.notify(
+          `🗓️ Next reading session in **${escapeMarkdown(this.record.name)}**: <t:${t}:F> (<t:${t}:R>). ${this.ctx.notifier.roomLink(this.id)}`,
+        );
+      }
     }
     if (input.turnMinutes !== undefined) {
       const minutes = Number(input.turnMinutes);
@@ -841,6 +1056,7 @@ export class RoomManager {
       ...books.map((b) => b.uploadedBy),
     ]);
     const room = new LiveRoom(record, books, this.context());
+    room.lastTurnEndedAt = await this.ctx.db.lastTurnEnd(roomId).catch(() => null);
     this.live.set(roomId, room);
     room.scheduleUnload();
     return room;
@@ -854,6 +1070,7 @@ export class RoomManager {
       description,
       ownerId: owner.id,
       activeBookId: null,
+      webhookUrl: null,
       settings: { ...DEFAULT_ROOM_SETTINGS },
       state: { queue: [], reader: null, turnStartedAt: null, moderators: [], banned: [] },
       createdAt: now,
@@ -889,6 +1106,8 @@ export class RoomManager {
         bookAuthor: row.bookAuthor,
         bookFormat: row.bookFormat,
         bookPosition: row.bookPosition,
+        bookPageCount: row.bookPageCount,
+        nextSessionAt: row.settings.nextSessionAt,
         bookCount: row.bookCount,
         online: [],
         readerName: null,

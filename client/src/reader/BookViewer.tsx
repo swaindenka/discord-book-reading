@@ -33,6 +33,7 @@ import { defaultPrefs } from './types';
 import { HighlighterToggle, HighlightsMenu } from './HighlightTools';
 import { SelectionPopover } from './SelectionPopover';
 import { HighlightActions } from './HighlightActions';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 type ReaderComponent = ComponentType<ReaderProps & RefAttributes<ReaderHandle>>;
 
@@ -51,6 +52,8 @@ const READERS: Record<BookFormat, ReaderComponent> = {
 };
 
 const ZOOMABLE: BookFormat[] = ['pdf', 'cbz'];
+/** Marker for books that stream instead of being downloaded first. */
+const STREAMED = new ArrayBuffer(0);
 
 async function downloadBook(url: string, onProgress: (loaded: number, total: number) => void, signal: AbortSignal) {
   const res = await fetch(url, { credentials: 'same-origin', signal });
@@ -101,6 +104,8 @@ export function BookViewer({
   status,
   highlights,
   dictionary,
+  overlay,
+  onPageCount,
 }: {
   book: BookInfo;
   target: ReaderTarget;
@@ -110,6 +115,10 @@ export function BookViewer({
   highlights: ViewerHighlights;
   /** Show word definitions when text is selected. */
   dictionary: boolean;
+  /** Drawn over the page area (live reactions). */
+  overlay?: ReactNode;
+  /** Called once the number of pages is known (page-based formats). */
+  onPageCount?: (pageCount: number) => void;
 }) {
   const [data, setData] = useState<ArrayBuffer | null>(null);
   const [progress, setProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
@@ -191,13 +200,18 @@ export function BookViewer({
     setData(null);
     setError(null);
     setMeta({ label: '' });
+    // PDFs open straight away: pdf.js fetches just the pages it needs (HTTP range requests).
+    if (book.format === 'pdf') {
+      setData(STREAMED);
+      return;
+    }
     downloadBook(api.bookUrl(book.id), (loaded, total) => setProgress({ loaded, total }), controller.signal)
       .then(setData)
       .catch((err: Error) => {
         if (err.name !== 'AbortError') setError(err.message);
       });
     return () => controller.abort();
-  }, [book.id, attempt]);
+  }, [book.id, book.format, attempt]);
 
   useEffect(() => {
     if (meta.page) setPageInput(String(meta.page));
@@ -229,6 +243,11 @@ export function BookViewer({
   }, []);
 
   const onMeta = useCallback((next: ReaderMeta) => setMeta(next), []);
+  const pageCountRef = useRef(onPageCount);
+  pageCountRef.current = onPageCount;
+  useEffect(() => {
+    if (meta.pageCount) pageCountRef.current?.(meta.pageCount);
+  }, [meta.pageCount]);
   const onError = useCallback((message: string) => setError(message), []);
 
   const Reader = READERS[book.format];
@@ -411,10 +430,28 @@ export function BookViewer({
             </p>
           </div>
         ) : (
+          <ErrorBoundary
+            key={`${book.id}-${attempt}`}
+            fallback={(reset) => (
+              <div className="viewer-message">
+                <p>Something went wrong while showing this book.</p>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    reset();
+                    setAttempt((n) => n + 1);
+                  }}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+          >
           <Suspense fallback={<Spinner label="Loading reader…" />}>
             <Reader
               key={book.id}
               ref={handle}
+              src={api.bookUrl(book.id)}
               book={book}
               data={data}
               target={target}
@@ -427,6 +464,7 @@ export function BookViewer({
               highlights={readerHighlights}
             />
           </Suspense>
+          </ErrorBoundary>
         )}
         {clicked &&
           (() => {
@@ -457,6 +495,7 @@ export function BookViewer({
             }}
           />
         )}
+        {overlay}
       </div>
     </div>
   );

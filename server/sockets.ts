@@ -148,6 +148,25 @@ export function setupSockets({ io, auth, db, rooms }: SocketDeps) {
       handle(async (payload: { id?: unknown }) => (await currentRoom()).removeHighlight(user, payload?.id)),
     );
 
+    socket.on('reaction', async (payload) => {
+      const room = socket.data.roomId ? await rooms.get(socket.data.roomId) : null;
+      const emoji = room?.react(user, payload?.emoji);
+      if (!room || !emoji) return;
+      io.to(channel(room.id)).emit('reaction', { userId: user.id, name: user.displayName, emoji });
+    });
+
+    socket.on('book:pages', async (payload) => {
+      const room = socket.data.roomId ? await rooms.get(socket.data.roomId) : null;
+      await room?.setPageCount(user, payload?.bookId, payload?.pageCount).catch(() => {});
+    });
+
+    socket.on(
+      'stats:get',
+      handle(async (payload: { scope?: unknown }) => ({
+        stats: await (await currentRoom()).stats(payload?.scope === 'room' ? 'room' : 'book'),
+      })),
+    );
+
     socket.on(
       'chat:send',
       handle(async (payload: { body?: unknown }) => (await currentRoom()).chat(user, payload?.body)),

@@ -9,6 +9,7 @@ import type { Database } from './db.js';
 import { Auth, UserCache } from './auth.js';
 import { apiRouter } from './api.js';
 import { Dictionary } from './dictionary.js';
+import { Notifier } from './notifier.js';
 import { RoomManager, UserError, type IO } from './rooms.js';
 import { setupSockets } from './sockets.js';
 import type { BookStorage } from './storage.js';
@@ -80,7 +81,12 @@ export function createApp({ config, db, storage }: AppDeps): App {
     pingInterval: 20_000,
     pingTimeout: 20_000,
   });
-  const rooms = new RoomManager({ io, db, users, storage });
+  const notifier = new Notifier({
+    appName: config.appName,
+    publicUrl: config.publicUrl,
+    extraWebhookPrefixes: config.webhookExtraPrefixes,
+  });
+  const rooms = new RoomManager({ io, db, users, storage, notifier });
 
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
