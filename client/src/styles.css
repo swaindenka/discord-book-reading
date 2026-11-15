@@ -696,6 +696,14 @@ select.input {
 .file-drop.has-file {
   border-style: solid;
 }
+.file-drop.busy {
+  cursor: progress;
+  border-color: var(--accent);
+}
+.error-text {
+  margin-top: 4px;
+  color: var(--danger);
+}
 .file-drop strong {
   color: var(--text);
   word-break: break-word;

@@ -58,7 +58,7 @@ export interface BookName {
 
 /** Best-effort title and author from a file name (with or without extension). */
 export function parseBookFilename(filename: string): BookName {
-  let base = filename.replace(/^.*[\\/]/, '').replace(/\.(pdf|epub|txt|md|markdown|cbz)$/i, '');
+  let base = filename.replace(/^.*[\\/]/, '').replace(/\.(pdf|epub|txt|md|markdown|cbz|mobi|azw3?|prc)$/i, '');
   // "A.Man.Called.Ove" style names.
   if (!base.includes(' ') && (base.match(/\./g) ?? []).length >= 2) base = base.replace(/\./g, ' ');
   base = stripJunkBrackets(tidy(base));

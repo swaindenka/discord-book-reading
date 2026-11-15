@@ -25,7 +25,7 @@ function CreateRoomDialog({ onClose }: { onClose: () => void }) {
 
   const chooseFile = (next: File | null) => {
     if (next && !formatFromFilename(next.name)) {
-      toast.show('That file type is not supported. Use PDF, EPUB, TXT, Markdown or CBZ.', 'error');
+      toast.show('That file type is not supported. Use PDF, EPUB, MOBI, AZW3, TXT, Markdown or CBZ.', 'error');
       return;
     }
     if (next && next.size > config.maxUploadMb * 1024 * 1024) {

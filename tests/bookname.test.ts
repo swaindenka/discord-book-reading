@@ -20,6 +20,14 @@ describe('parseBookFilename', () => {
     expect(parseBookFilename(input)).toEqual(expected);
   });
 
+  it('strips Kindle extensions (MOBI, AZW3) like any other book file', () => {
+    expect(parseBookFilename("The Quiet Harbour -- Jane Doe -- 2019 -- Anna's Archive.mobi")).toEqual({
+      title: 'The Quiet Harbour',
+      author: 'Jane Doe',
+    });
+    expect(parseBookFilename('Field Notes.azw3').title).toBe('Field Notes');
+  });
+
   it('recognises names that were cut short (room names are capped at 60 characters)', () => {
     const truncated = 'A Man Called Ove A Novel -- Fredrik Backman -- 064e814eedc0';
     expect(looksLikeRawFilename(truncated)).toBe(true);

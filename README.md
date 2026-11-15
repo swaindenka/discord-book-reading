@@ -4,7 +4,7 @@ Read books together with your Discord server. Instead of one person screen-shari
 
 ![A reading room: the book on the left with the reader's live pointer, the reading queue on the right](docs/images/room-queue.jpg)
 
-- **Many formats** – PDF, EPUB, plain text, Markdown and comic archives (CBZ).
+- **Many formats** – PDF, EPUB, Kindle (MOBI, AZW3, AZW, PRC), plain text, Markdown and comic archives (CBZ). Kindle books are turned into EPUBs in your browser while you upload them, so they get synced pages, highlights and the dictionary too. DRM-protected Kindle books can't be opened.
 - **Synced pages** – whoever is reading turns the pages (and scrolls) for everyone. Their mouse pointer shows up on PDF and comic pages, and text they select in an EPUB is highlighted for everyone, much like a screen share. Anyone can browse ahead and jump back to the reader with one click.
 - **Discord sign-in** – one queue spot per Discord account, so opening more browsers or tabs doesn't get anyone extra turns. Anyone with a Discord account can join, or you can limit sign-in to members of one or more Discord servers.
 - **Highlights** – moderators and admins can switch on the highlighter and mark text (or, on scanned PDF and comic pages, an area) in four colours. Everyone sees the highlights live, and they stay with the book. The highlights list jumps straight to each one, and moderators can click a highlight to remove it.
@@ -107,6 +107,7 @@ server/   Express + Socket.IO backend
   db.ts         libSQL / SQLite schema and queries
 client/   React app (Vite)
   reader/       PDF (pdf.js), EPUB (epub.js), text/Markdown and CBZ readers
+  convert/      Kindle (MOBI/AZW3) to EPUB conversion before upload (parser: foliate-js)
   room/         queue, chat, library and settings panels
 shared/   types shared by both sides (socket protocol, positions)
 tests/    Vitest tests, including a fake Discord API for the OAuth flow
@@ -131,4 +132,4 @@ The server stores one position per book: a page number plus the scroll point for
 
 ## License
 
-MIT. The bundled dictionary data is [WordNet 3.1](https://wordnet.princeton.edu/) © Princeton University, used under the WordNet licence.
+MIT. Kindle books are parsed with [foliate-js](https://github.com/johnfactotum/foliate-js) (MIT). The bundled dictionary data is [WordNet 3.1](https://wordnet.princeton.edu/) © Princeton University, used under the WordNet licence.
