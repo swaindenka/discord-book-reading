@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Crown, Shield, ShieldCheck, Upload, X } from 'lucide-react';
 import type { MemberRole } from '../../../shared/types';
 import { ACCEPTED_EXTENSIONS } from '../../../shared/types';
+import { ConversionError, KINDLE_EXTENSIONS, convertKindleToEpub, isKindleFile } from '../convert/kindle';
 import { colorFor, cx, formatBytes, initials } from '../util';
 
 export function Avatar({
@@ -90,10 +91,34 @@ export function FileDrop({
   maxMb: number;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [converting, setConverting] = useState<{ name: string; progress: number } | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+
+  // Kindle books are turned into EPUBs right here, before anything is uploaded.
+  const choose = async (picked: File | null) => {
+    setProblem(null);
+    if (!picked || !isKindleFile(picked.name)) {
+      onFile(picked);
+      return;
+    }
+    if (converting) return;
+    setConverting({ name: picked.name, progress: 0 });
+    try {
+      const epub = await convertKindleToEpub(picked, (progress) => setConverting({ name: picked.name, progress }));
+      onFile(epub);
+    } catch (err) {
+      console.warn(err);
+      setProblem(err instanceof ConversionError ? err.message : "This Kindle book couldn't be converted. Try an EPUB or PDF copy.");
+    } finally {
+      setConverting(null);
+    }
+  };
+
   return (
     <div
-      className={cx('file-drop', dragging && 'dragging', file && 'has-file')}
+      className={cx('file-drop', dragging && 'dragging', file && 'has-file', converting && 'busy')}
+      aria-busy={Boolean(converting)}
       onDragOver={(e) => {
         e.preventDefault();
         setDragging(true);
@@ -103,9 +128,9 @@ export function FileDrop({
         e.preventDefault();
         setDragging(false);
         const dropped = e.dataTransfer.files[0];
-        if (dropped) onFile(dropped);
+        if (dropped) void choose(dropped);
       }}
-      onClick={() => input.current?.click()}
+      onClick={() => !converting && input.current?.click()}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && input.current?.click()}
@@ -114,21 +139,31 @@ export function FileDrop({
         ref={input}
         type="file"
         hidden
-        accept={ACCEPTED_EXTENSIONS.join(',')}
-        onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+        accept={[...ACCEPTED_EXTENSIONS, ...KINDLE_EXTENSIONS].join(',')}
+        onChange={(e) => {
+          void choose(e.target.files?.[0] ?? null);
+          e.target.value = '';
+        }}
       />
       <Upload size={22} aria-hidden />
-      {file ? (
+      {converting ? (
+        <div>
+          <strong>{converting.name}</strong>
+          <div className="muted small">Converting the Kindle book to EPUB… {Math.round(converting.progress * 100)}%</div>
+        </div>
+      ) : file ? (
         <div>
           <strong>{file.name}</strong>
           <div className="muted small">{formatBytes(file.size)} · click to change</div>
+          {problem && <div className="small error-text">{problem}</div>}
         </div>
       ) : (
         <div>
           <strong>Drop a book here or click to browse</strong>
           <div className="muted small">
-            PDF, EPUB, TXT, Markdown or CBZ · up to {maxMb} MB
+            PDF, EPUB, MOBI, AZW3, TXT, Markdown or CBZ · up to {maxMb} MB
           </div>
+          {problem && <div className="small error-text">{problem}</div>}
         </div>
       )}
     </div>

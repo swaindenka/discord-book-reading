@@ -63,7 +63,7 @@ function UploadForm({ roomId }: { roomId: string }) {
 
   const choose = (next: File | null) => {
     if (next && !formatFromFilename(next.name)) {
-      toast.show('Unsupported file type. Use PDF, EPUB, TXT, Markdown or CBZ.', 'error');
+      toast.show('Unsupported file type. Use PDF, EPUB, MOBI, AZW3, TXT, Markdown or CBZ.', 'error');
       return;
     }
     if (next && next.size > config.maxUploadMb * 1024 * 1024) {
