@@ -21,6 +21,7 @@ Read books together with your Discord server. Instead of one person screen-shari
 - **Live reactions** – listeners can send 👏 ❤️ 😂 😮 😢 🔥, which float up over the page for everyone.
 - **Next session** – moderators set the date and time; everyone sees it in their own time zone and can add it to their calendar.
 - **Progress** – page counts and how far the group is (page 120 of 300, 40%) on room cards and in the library.
+- **Comfortable reading** – page controls float at the bottom centre of the page, right where a page ends. The top bars and the turn bar fold away for more room (the turn bar pops back open when it's your turn), and the choice is remembered. On phones you can swipe to turn pages, and the screen stays awake while a book is open.
 - **Fast with big PDFs** – PDFs stream in pieces, so the first page shows before the whole file has downloaded.
 
 ![The same room with the chat open](docs/images/room-chat.jpg)

@@ -196,6 +196,23 @@ export const EpubReader = forwardRef<ReaderHandle, ReaderProps>(function EpubRea
     rendition.on('touchstart', press);
     rendition.on('mouseup', release);
     rendition.on('touchend', release);
+    // Swipe left/right inside the book to turn pages on phones.
+    let swipe: { x: number; y: number; t: number } | null = null;
+    rendition.on('touchstart', (e: TouchEvent) => {
+      const t = e.touches[0];
+      swipe = e.touches.length === 1 && t ? { x: t.screenX, y: t.screenY, t: Date.now() } : null;
+    });
+    rendition.on('touchend', (e: TouchEvent) => {
+      const start = swipe;
+      swipe = null;
+      const t = e.changedTouches[0];
+      if (!start || !t || Date.now() - start.t > 700) return;
+      const dx = t.screenX - start.x;
+      if (Math.abs(dx) < 60 || Math.abs(t.screenY - start.y) > 50) return;
+      if (!(e.target as Node | null)?.ownerDocument?.getSelection()?.isCollapsed) return;
+      if (dx < 0) void goNext();
+      else void goPrev();
+    });
 
     // Arrow keys while the book iframe has focus.
     rendition.on('keyup', (e: KeyboardEvent) => {

@@ -1018,6 +1018,9 @@ select.input {
   grid-template-rows: var(--header-h) minmax(0, 1fr);
   overflow: hidden;
 }
+.room-page.top-hidden {
+  grid-template-rows: minmax(0, 1fr);
+}
 .room-header {
   display: flex;
   align-items: center;
@@ -1050,6 +1053,7 @@ select.input {
   grid-template-columns: minmax(0, 1fr) var(--sidebar-w);
 }
 .room-main {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1355,6 +1359,75 @@ select.input {
   font-size: 0.85rem;
 }
 
+/* Collapsed turn bar: a small pill in the bottom-left corner. */
+.turn-pill {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(260px, 32%);
+  height: 38px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.turn-pill:hover {
+  border-color: var(--accent);
+}
+.turn-pill.my-turn {
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success-soft) 70%, var(--surface));
+}
+.turn-pill.over {
+  border-color: var(--warn);
+}
+.turn-pill-name {
+  min-width: 0;
+  font-weight: 600;
+}
+.turn-pill-time {
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.turn-collapse {
+  margin-left: 2px;
+}
+
+/* Top bars hidden: a small cluster keeps the way back (and the side panel) in reach. */
+.focus-controls {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--shadow);
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+.focus-controls:hover,
+.focus-controls:focus-within {
+  opacity: 1;
+}
+.focus-controls .status-pill {
+  height: 30px;
+}
+
 /* ---------- Viewer ---------- */
 .viewer {
   flex: 1;
@@ -1439,6 +1512,53 @@ select.input {
   flex: 1;
   min-height: 0;
 }
+/* Page controls float at the bottom centre of the page. */
+.page-nav-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 8;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+}
+.page-nav-dock > * {
+  pointer-events: auto;
+}
+.page-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: var(--shadow);
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+.page-nav:hover,
+.page-nav:focus-within {
+  opacity: 1;
+}
+.page-nav .icon-btn {
+  border-radius: 50%;
+}
+.floating-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow);
+}
 .viewer-message {
   position: absolute;
   inset: 0;
@@ -1468,6 +1588,8 @@ select.input {
   display: flex;
   flex-direction: column;
   padding: 24px;
+  /* Room for the floating page controls below the last line. */
+  padding-bottom: 76px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
@@ -1678,7 +1800,7 @@ select.input {
 .epub-host {
   width: min(100%, 780px);
   height: 100%;
-  padding: 28px 44px;
+  padding: 28px 44px 68px;
 }
 .epub-tap {
   position: absolute;
@@ -2357,13 +2479,45 @@ select.input {
     width: 28px;
   }
   .epub-host {
-    padding: 16px 28px;
+    padding: 16px 28px 64px;
   }
   .epub-tap {
     width: 28px;
   }
   .paged-scroll {
-    padding: 12px;
+    padding: 12px 12px 68px;
+  }
+  .room-header {
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .page-nav-dock {
+    bottom: 10px;
+  }
+  .page-nav .viewer-label {
+    max-width: 34vw;
+  }
+  .page-input {
+    width: 42px;
+  }
+  .page-jump {
+    gap: 4px;
+    padding: 0 2px;
+  }
+  .page-nav .icon-btn {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 4px;
+  }
+  .turn-pill {
+    left: 10px;
+    bottom: 10px;
+    gap: 6px;
+    max-width: 30%;
+    padding: 0 6px 0 5px;
+  }
+  .turn-pill:has(.turn-pill-time) .turn-pill-name {
+    display: none;
   }
   .text-scroll {
     padding: 0;
@@ -2384,6 +2538,14 @@ select.input {
   }
   .brand-name {
     display: none;
+  }
+}
+
+@media (max-width: 400px) {
+  /* Too narrow for the pill and the page controls side by side. */
+  .turn-pill {
+    bottom: 58px;
+    max-width: 60%;
   }
 }
 
