@@ -24,6 +24,26 @@ export interface UserRecord {
   isAdmin: boolean;
 }
 
+export interface TurnRecord {
+  id: string;
+  roomId: string;
+  bookId: string | null;
+  userId: string;
+  userName: string;
+  startedAt: number;
+  endedAt: number;
+  reason: string;
+}
+
+export interface TurnStatRow {
+  userId: string;
+  userName: string;
+  turns: number;
+  passes: number;
+  ms: number;
+  lastReadAt: number | null;
+}
+
 export interface SiteAdminRecord {
   userId: string;
   addedBy: string;
@@ -44,6 +64,8 @@ export interface RoomRecord {
   description: string;
   ownerId: string;
   activeBookId: string | null;
+  /** Discord webhook for channel notifications. Secret: never sent to browsers. */
+  webhookUrl: string | null;
   settings: RoomSettings;
   state: PersistedTurnState;
   createdAt: number;
@@ -56,6 +78,7 @@ export interface BookRecord {
   title: string;
   author: string | null;
   format: BookFormat;
+  pageCount: number | null;
   storageKey: string;
   size: number;
   uploadedBy: string;
@@ -131,6 +154,17 @@ const SCHEMA = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights(book_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS turns (
+    id TEXT PRIMARY KEY,
+    room_id TEXT NOT NULL,
+    book_id TEXT,
+    user_id TEXT NOT NULL,
+    user_name TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL,
+    reason TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_turns_room ON turns(room_id, ended_at)`,
   `CREATE TABLE IF NOT EXISTS dictionary_cache (
     key TEXT PRIMARY KEY,
     data TEXT,
@@ -183,6 +217,7 @@ function rowToRoom(row: Row): RoomRecord {
     description: String(row.description ?? ''),
     ownerId: String(row.owner_id),
     activeBookId: str(row.active_book_id),
+    webhookUrl: str(row.webhook_url),
     settings: { ...DEFAULT_ROOM_SETTINGS, ...parseJson<Partial<RoomSettings>>(row.settings, {}) },
     state: {
       queue: Array.isArray(state.queue) ? state.queue : [],
@@ -203,6 +238,7 @@ function rowToBook(row: Row): BookRecord {
     title: String(row.title),
     author: str(row.author),
     format: String(row.format) as BookFormat,
+    pageCount: row.page_count === null || row.page_count === undefined ? null : num(row.page_count),
     storageKey: String(row.storage_key),
     size: num(row.size),
     uploadedBy: String(row.uploaded_by),
@@ -241,6 +277,9 @@ export class Database {
     // Columns added after the first release.
     const bookColumns = (await this.all('PRAGMA table_info(books)')).map((r) => String(r.name));
     if (!bookColumns.includes('author')) await this.run('ALTER TABLE books ADD COLUMN author TEXT');
+    if (!bookColumns.includes('page_count')) await this.run('ALTER TABLE books ADD COLUMN page_count INTEGER');
+    const roomColumns = (await this.all('PRAGMA table_info(rooms)')).map((r) => String(r.name));
+    if (!roomColumns.includes('webhook_url')) await this.run('ALTER TABLE rooms ADD COLUMN webhook_url TEXT');
     await this.cleanupImportedNames();
   }
 
@@ -332,11 +371,13 @@ export class Database {
 
   async saveRoom(room: RoomRecord): Promise<void> {
     await this.run(
-      `UPDATE rooms SET name = ?, description = ?, active_book_id = ?, settings = ?, state = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE rooms SET name = ?, description = ?, active_book_id = ?, webhook_url = ?, settings = ?, state = ?, updated_at = ?
+       WHERE id = ?`,
       [
         room.name,
         room.description,
         room.activeBookId,
+        room.webhookUrl,
         JSON.stringify(room.settings),
         JSON.stringify(room.state),
         room.updatedAt,
@@ -358,11 +399,12 @@ export class Database {
       bookFormat: BookFormat | null;
       bookAuthor: string | null;
       bookPosition: Position | null;
+      bookPageCount: number | null;
     })[]
   > {
     const rows = await this.all(
       `SELECT r.*, u.display_name AS owner_name, ab.title AS book_title, ab.format AS book_format,
-         ab.author AS book_author, ab.position AS book_position,
+         ab.author AS book_author, ab.position AS book_position, ab.page_count AS book_page_count,
          (SELECT COUNT(*) FROM books b WHERE b.room_id = r.id) AS book_count
        FROM rooms r
        LEFT JOIN users u ON u.id = r.owner_id
@@ -377,6 +419,7 @@ export class Database {
       bookFormat: (str(row.book_format) as BookFormat | null) ?? null,
       bookAuthor: str(row.book_author),
       bookPosition: parseJson<Position | null>(row.book_position, null),
+      bookPageCount: row.book_page_count === null || row.book_page_count === undefined ? null : num(row.book_page_count),
     }));
   }
 
@@ -390,6 +433,7 @@ export class Database {
       [
         { sql: 'DELETE FROM messages WHERE room_id = ?', args: [id] },
         { sql: 'DELETE FROM highlights WHERE room_id = ?', args: [id] },
+        { sql: 'DELETE FROM turns WHERE room_id = ?', args: [id] },
         { sql: 'DELETE FROM books WHERE room_id = ?', args: [id] },
         { sql: 'DELETE FROM rooms WHERE id = ?', args: [id] },
       ],
@@ -426,6 +470,47 @@ export class Database {
   async listBooks(roomId: string): Promise<BookRecord[]> {
     const rows = await this.all('SELECT * FROM books WHERE room_id = ? ORDER BY created_at ASC', [roomId]);
     return rows.map(rowToBook);
+  }
+
+  async setBookPageCount(id: string, pageCount: number): Promise<void> {
+    await this.run('UPDATE books SET page_count = ? WHERE id = ?', [pageCount, id]);
+  }
+
+  // ---- turn history ------------------------------------------------------------
+
+  async addTurn(turn: TurnRecord): Promise<void> {
+    await this.run(
+      `INSERT INTO turns (id, room_id, book_id, user_id, user_name, started_at, ended_at, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [turn.id, turn.roomId, turn.bookId, turn.userId, turn.userName, turn.startedAt, turn.endedAt, turn.reason],
+    );
+  }
+
+  /** Reading time per person in a room, optionally for one book. Passes don't count as reading. */
+  async turnStats(roomId: string, bookId: string | null): Promise<TurnStatRow[]> {
+    const rows = await this.all(
+      `SELECT user_id, MAX(user_name) AS user_name,
+         SUM(CASE WHEN reason = 'passed' THEN 0 ELSE 1 END) AS turns,
+         SUM(CASE WHEN reason = 'passed' THEN 1 ELSE 0 END) AS passes,
+         SUM(CASE WHEN reason = 'passed' THEN 0 ELSE ended_at - started_at END) AS ms,
+         MAX(CASE WHEN reason = 'passed' THEN NULL ELSE ended_at END) AS last_read
+       FROM turns WHERE room_id = ? AND (? IS NULL OR book_id = ?)
+       GROUP BY user_id`,
+      [roomId, bookId, bookId],
+    );
+    return rows.map((r) => ({
+      userId: String(r.user_id),
+      userName: String(r.user_name),
+      turns: num(r.turns),
+      passes: num(r.passes),
+      ms: num(r.ms),
+      lastReadAt: r.last_read === null || r.last_read === undefined ? null : num(r.last_read),
+    }));
+  }
+
+  async lastTurnEnd(roomId: string): Promise<number | null> {
+    const [row] = await this.all('SELECT MAX(ended_at) AS last FROM turns WHERE room_id = ?', [roomId]);
+    return row?.last === null || row?.last === undefined ? null : num(row.last);
   }
 
   async updateBookDetails(id: string, title: string, author: string | null): Promise<void> {

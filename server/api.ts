@@ -111,6 +111,7 @@ export function apiRouter({ config, db, storage, rooms, users, dictionary }: Api
         size: file.size,
         uploadedBy: user.id,
         position: null,
+        pageCount: null,
         createdAt: Date.now(),
       };
       await storage.save(book.storageKey, file.path);

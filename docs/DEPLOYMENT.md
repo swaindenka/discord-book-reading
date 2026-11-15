@@ -168,6 +168,15 @@ docker run --rm -v discord-book-reading_app-data:/data -v "$PWD":/backup busybox
 
 ---
 
+## Discord channel notifications (optional)
+
+Each room can post to a Discord channel: when reading starts, when the turn passes to someone (with an @mention so they get a ping), when the book changes, and when a moderator schedules the next session.
+
+1. In Discord, open the channel's settings → **Integrations** → **Webhooks** → **New Webhook**, then **Copy Webhook URL**.
+2. In the room, open the **Room** tab → **Discord notifications**, paste the URL and click **Connect**. Use **Send test message** to check it.
+
+The webhook URL is stored on the server and never shown to room members. @mentions only work for people who signed in with Discord.
+
 ## Word definitions
 
 Selecting a word in a book shows its meaning. It works out of the box with no setup:

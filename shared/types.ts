@@ -97,6 +97,8 @@ export interface BookInfo {
   uploadedByName: string;
   createdAt: number;
   position: Position | null;
+  /** Total pages for page-based formats, once known. */
+  pageCount: number | null;
 }
 
 export interface RoomSettings {
@@ -109,6 +111,13 @@ export interface RoomSettings {
   offlineGraceSeconds: number;
   /** Suggested minutes per turn (0 = no limit). Readers get a gentle reminder; nobody is cut off. */
   turnMinutes: number;
+  /** When the next reading session is planned (ms since epoch), if set. */
+  nextSessionAt: number | null;
+  /** Discord channel notifications (when a webhook is connected). */
+  notifyStart: boolean;
+  notifyTurns: boolean;
+  /** @mention the next reader on Discord so they get a ping. */
+  pingReaders: boolean;
 }
 
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
@@ -117,7 +126,32 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   autoSkipOffline: true,
   offlineGraceSeconds: 60,
   turnMinutes: 0,
+  nextSessionAt: null,
+  notifyStart: true,
+  notifyTurns: true,
+  pingReaders: true,
 };
+
+export const REACTIONS = ['👏', '❤️', '😂', '😮', '😢', '🔥'] as const;
+export type Reaction = (typeof REACTIONS)[number];
+
+export interface ReactionEvent {
+  userId: string;
+  name: string;
+  emoji: Reaction;
+}
+
+/** Reading time per person, from the room's turn history. */
+export interface ReaderStat {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+  turns: number;
+  passes: number;
+  /** Seconds spent reading (passes excluded; includes the turn in progress). */
+  seconds: number;
+  lastReadAt: number | null;
+}
 
 export interface RoomState {
   id: string;
@@ -135,6 +169,8 @@ export interface RoomState {
   books: BookInfo[];
   activeBookId: string | null;
   position: Position | null;
+  /** A Discord webhook is connected for channel notifications (the URL itself stays on the server). */
+  webhookConnected: boolean;
   serverTime: number;
 }
 
@@ -147,6 +183,8 @@ export interface RoomSummary {
   bookAuthor: string | null;
   bookFormat: BookFormat | null;
   bookPosition: Position | null;
+  bookPageCount: number | null;
+  nextSessionAt: number | null;
   bookCount: number;
   online: { name: string; avatarUrl: string | null }[];
   readerName: string | null;
@@ -261,7 +299,10 @@ export type ModAction =
   | { type: 'member.ban'; userId: string }
   | { type: 'member.unban'; userId: string }
   | { type: 'book.activate'; bookId: string }
-  | { type: 'book.update'; bookId: string; title: string; author: string };
+  | { type: 'book.update'; bookId: string; title: string; author: string }
+  | { type: 'queue.fair' }
+  | { type: 'webhook.set'; url: string }
+  | { type: 'webhook.test' };
 
 export type AckResult<T extends object = object> = ({ ok: true } & T) | { ok: false; error: string };
 export type Ack<T extends object = object> = (result: AckResult<T>) => void;
@@ -280,6 +321,10 @@ export interface ClientToServerEvents {
   'turn:pass': (ack: Ack) => void;
   'nav:set': (payload: { bookId: string; position: Position }, ack?: Ack) => void;
   pointer: (payload: Omit<PointerEvent, 'userId'>) => void;
+  reaction: (payload: { emoji: string }) => void;
+  /** Reports how many pages a page-based book has, once a reader has opened it. */
+  'book:pages': (payload: { bookId: string; pageCount: number }) => void;
+  'stats:get': (payload: { scope: 'book' | 'room' }, ack: Ack<{ stats: ReaderStat[] }>) => void;
   selection: (payload: Omit<SelectionCue, 'userId'>) => void;
   'highlight:add': (
     payload: { bookId: string; color: HighlightColor; anchor: HighlightAnchor; text: string; label: string },
@@ -295,6 +340,7 @@ export interface ServerToClientEvents {
   'room:state': (state: RoomState) => void;
   'room:kicked': (payload: { banned: boolean }) => void;
   'room:deleted': () => void;
+  reaction: (payload: ReactionEvent) => void;
   'nav:position': (payload: { bookId: string; position: Position; by: string }) => void;
   pointer: (payload: PointerEvent) => void;
   selection: (payload: SelectionCue) => void;

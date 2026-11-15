@@ -7,14 +7,14 @@ import { FileDrop, ProgressBar } from '../components/ui';
 import { BookFields, useBookDetails } from '../components/BookFields';
 import { useToast } from '../components/Toasts';
 import { useSession } from '../session';
-import { cx, formatBytes } from '../util';
+import { cx, formatBytes, progressFraction, progressLabel } from '../util';
 import type { RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
 
 function progressText(book: BookInfo) {
   const p = book.position;
-  if (!p) return 'Not started';
-  if (p.kind === 'page') return `Stopped at page ${p.page}`;
+  if (!p) return book.pageCount ? `Not started · ${book.pageCount} pages` : 'Not started';
+  if (p.kind === 'page') return `Stopped at ${progressLabel(p, book.pageCount)}`;
   return [p.label, p.percent !== undefined && `${Math.round(p.percent)}%`].filter(Boolean).join(' · ') || 'In progress';
 }
 
@@ -148,6 +148,11 @@ export function LibraryPanel({ state, view, room }: { state: RoomState; view: Ro
                   <span className="muted small">
                     {progressText(book)} · {formatBytes(book.size)}
                   </span>
+                  {progressFraction(book.position, book.pageCount) !== null && (
+                    <div className="mini-progress" aria-hidden>
+                      <div style={{ width: `${progressFraction(book.position, book.pageCount)! * 100}%` }} />
+                    </div>
+                  )}
                   <span className="muted small">Added by {book.uploadedByName}</span>
                 </div>
                 <div className="book-row-actions">

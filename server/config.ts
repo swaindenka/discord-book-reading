@@ -98,6 +98,8 @@ export const config = {
   maxUploadMb: int('MAX_UPLOAD_MB', 100),
   maxRoomsPerUser: int('MAX_ROOMS_PER_USER', 10),
   maxBooksPerRoom: int('MAX_BOOKS_PER_ROOM', 25),
+  /** Extra webhook URL prefixes besides discord.com (only for testing against a local server). */
+  webhookExtraPrefixes: list('WEBHOOK_EXTRA_PREFIXES'),
   clientDir: path.resolve(env('CLIENT_DIR') ?? 'dist/client'),
 
   dictionary: {

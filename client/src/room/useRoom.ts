@@ -7,6 +7,8 @@ import type {
   ModAction,
   PointerEvent,
   Position,
+  ReactionEvent,
+  ReaderStat,
   RoomState,
   SelectionCue,
 } from '../../../shared/types';
@@ -25,6 +27,9 @@ export function useRoom(roomId: string) {
   const [exit, setExit] = useState<RoomExit>(null);
   const [pointer, setPointer] = useState<PointerEvent | null>(null);
   const [selection, setSelection] = useState<SelectionCue | null>(null);
+  /** Recent reactions, newest last; each fades out on its own. */
+  const [reactions, setReactions] = useState<(ReactionEvent & { key: number })[]>([]);
+  const reactionKey = useRef(0);
   const [highlightSet, setHighlightSet] = useState<{ bookId: string | null; items: BookHighlight[] }>({
     bookId: null,
     items: [],
@@ -69,6 +74,11 @@ export function useRoom(roomId: string) {
     const onDeleted = ({ id }: { id: string }) => setMessages((list) => list.filter((m) => m.id !== id));
     const onKicked = ({ banned }: { banned: boolean }) => setExit(banned ? 'banned' : 'kicked');
     const onRoomDeleted = () => setExit('deleted');
+    const onReaction = (r: ReactionEvent) => {
+      const key = ++reactionKey.current;
+      setReactions((list) => [...list.slice(-24), { ...r, key }]);
+      setTimeout(() => setReactions((list) => list.filter((x) => x.key !== key)), 3200);
+    };
     const onHighlightsSet = ({ bookId, highlights }: { bookId: string; highlights: BookHighlight[] }) =>
       setHighlightSet({ bookId, items: highlights });
     const onHighlightAdded = (h: BookHighlight) =>
@@ -92,6 +102,7 @@ export function useRoom(roomId: string) {
     socket.on('room:deleted', onRoomDeleted);
     socket.on('pointer', setPointer);
     socket.on('selection', setSelection);
+    socket.on('reaction', onReaction);
     socket.on('highlights:set', onHighlightsSet);
     socket.on('highlight:added', onHighlightAdded);
     socket.on('highlight:removed', onHighlightRemoved);
@@ -110,6 +121,7 @@ export function useRoom(roomId: string) {
       socket.off('room:deleted', onRoomDeleted);
       socket.off('pointer', setPointer);
       socket.off('selection', setSelection);
+      socket.off('reaction', onReaction);
       socket.off('highlights:set', onHighlightsSet);
       socket.off('highlight:added', onHighlightAdded);
       socket.off('highlight:removed', onHighlightRemoved);
@@ -161,6 +173,19 @@ export function useRoom(roomId: string) {
     getSocket().volatile.emit('pointer', { bookId, page, x, y });
   }, []);
 
+  const sendReaction = useCallback((emoji: string) => {
+    getSocket().emit('reaction', { emoji });
+  }, []);
+
+  const reportPages = useCallback((bookId: string, pageCount: number) => {
+    getSocket().emit('book:pages', { bookId, pageCount });
+  }, []);
+
+  const loadStats = useCallback(
+    async (scope: 'book' | 'room') => (await request<{ stats: ReaderStat[] }>('stats:get', { scope })).stats,
+    [],
+  );
+
   const sendSelection = useCallback((bookId: string, cfiRange: string | null) => {
     getSocket().emit('selection', { bookId, cfiRange });
   }, []);
@@ -176,11 +201,15 @@ export function useRoom(roomId: string) {
     pointer,
     selection,
     highlights,
+    reactions,
     clockOffset,
     actions,
     setPosition,
     sendPointer,
     sendSelection,
+    sendReaction,
+    reportPages,
+    loadStats,
   };
 }
 

@@ -104,7 +104,9 @@ export interface HighlightProps {
 
 export interface ReaderProps {
   book: BookInfo;
+  /** The whole file. Empty for PDFs, which pdf.js streams from `src` in ranges. */
   data: ArrayBuffer;
+  src: string;
   target: ReaderTarget;
   prefs: ReaderPrefs;
   onNavigate(event: NavigateEvent): void;

@@ -33,10 +33,19 @@ export function formatDay(ts: number) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-/** Short "where the group is" text for a saved reading position. */
-export function progressLabel(position: Position | null | undefined): string | null {
+/** How far through the book the group is (0–1), when known. */
+export function progressFraction(position: Position | null | undefined, pageCount?: number | null): number | null {
   if (!position) return null;
-  if (position.kind === 'page') return `page ${position.page}`;
+  if (position.kind === 'page') return pageCount ? Math.min(1, position.page / pageCount) : null;
+  return position.percent !== undefined ? position.percent / 100 : null;
+}
+
+/** Short "where the group is" text for a saved reading position. */
+export function progressLabel(position: Position | null | undefined, pageCount?: number | null): string | null {
+  if (!position) return null;
+  if (position.kind === 'page') {
+    return pageCount ? `page ${position.page} of ${pageCount} (${Math.round((position.page / pageCount) * 100)}%)` : `page ${position.page}`;
+  }
   if (position.percent !== undefined) return `${Math.round(position.percent)}%`;
   return position.label ?? null;
 }
