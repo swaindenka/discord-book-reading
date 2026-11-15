@@ -38,10 +38,26 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 type ReaderComponent = ComponentType<ReaderProps & RefAttributes<ReaderHandle>>;
 
 // Each reader (and its library: pdf.js, epub.js, …) is only downloaded when needed.
-const PdfReader = lazy(() => import('./PdfReader').then((m) => ({ default: m.PdfReader as ReaderComponent })));
-const EpubReader = lazy(() => import('./EpubReader').then((m) => ({ default: m.EpubReader as ReaderComponent })));
-const TextReader = lazy(() => import('./TextReader').then((m) => ({ default: m.TextReader as ReaderComponent })));
-const ComicReader = lazy(() => import('./ComicReader').then((m) => ({ default: m.ComicReader as ReaderComponent })));
+const PdfReader = lazy(() =>
+  import('./PdfReader').then((m) => ({
+    default: m.PdfReader as ReaderComponent,
+  })),
+);
+const EpubReader = lazy(() =>
+  import('./EpubReader').then((m) => ({
+    default: m.EpubReader as ReaderComponent,
+  })),
+);
+const TextReader = lazy(() =>
+  import('./TextReader').then((m) => ({
+    default: m.TextReader as ReaderComponent,
+  })),
+);
+const ComicReader = lazy(() =>
+  import('./ComicReader').then((m) => ({
+    default: m.ComicReader as ReaderComponent,
+  })),
+);
 
 const READERS: Record<BookFormat, ReaderComponent> = {
   pdf: PdfReader,
@@ -106,6 +122,8 @@ export function BookViewer({
   dictionary,
   overlay,
   onPageCount,
+  toolbarHidden = false,
+  floatingStatus,
 }: {
   book: BookInfo;
   target: ReaderTarget;
@@ -119,9 +137,16 @@ export function BookViewer({
   overlay?: ReactNode;
   /** Called once the number of pages is known (page-based formats). */
   onPageCount?: (pageCount: number) => void;
+  /** Focus mode: hide the toolbar to give the page more room. */
+  toolbarHidden?: boolean;
+  /** Shown above the page controls while the toolbar is hidden (e.g. "Back to the reader"). */
+  floatingStatus?: ReactNode;
 }) {
   const [data, setData] = useState<ArrayBuffer | null>(null);
-  const [progress, setProgress] = useState<{ loaded: number; total: number }>({ loaded: 0, total: 0 });
+  const [progress, setProgress] = useState<{ loaded: number; total: number }>({
+    loaded: 0,
+    total: 0,
+  });
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [meta, setMeta] = useState<ReaderMeta>({ label: '' });
@@ -133,7 +158,10 @@ export function BookViewer({
   const handle = useRef<ReaderHandle>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
-  const [clicked, setClicked] = useState<{ id: string; rect: SelectionRect } | null>(null);
+  const [clicked, setClicked] = useState<{
+    id: string;
+    rect: SelectionRect;
+  } | null>(null);
   const closeClicked = useCallback(() => setClicked(null), []);
   const [highlighter, setHighlighter] = useState(false);
   const [hlPrefs, setHlPrefs] = useState(() => loadPref('highlights', { color: 'yellow' as HighlightColor, show: true }));
@@ -251,6 +279,28 @@ export function BookViewer({
   const onError = useCallback((message: string) => setError(message), []);
 
   const Reader = READERS[book.format];
+  // Swipe left/right on a phone to turn pages (EPUB handles this inside its own frame).
+  const touch = useRef<{ x: number; y: number; t: number } | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touch.current = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, t: Date.now() } : null;
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = touch.current;
+    touch.current = null;
+    const t = e.changedTouches[0];
+    if (!start || !t || drawing) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 60 || Math.abs(dy) > 50 || Date.now() - start.t > 700) return;
+    if (!window.getSelection()?.isCollapsed) return;
+    // A zoomed-in page scrolls sideways; leave that gesture alone.
+    const scroller = (e.target as HTMLElement).closest?.('.paged-scroll');
+    if (scroller && scroller.scrollWidth > scroller.clientWidth + 2) return;
+    if (dx < 0) handle.current?.next();
+    else handle.current?.prev();
+  };
+
   const toggleFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void rootRef.current?.requestFullscreen?.();
@@ -258,162 +308,154 @@ export function BookViewer({
 
   return (
     <div className={cx('viewer', fullscreen && 'is-fullscreen')} ref={rootRef}>
-      <div className="viewer-toolbar">
-        <div className="toolbar-group">
-          <button className="icon-btn" onClick={() => handle.current?.prev()} aria-label="Previous page" title="Previous (←)">
-            <ChevronLeft size={18} />
-          </button>
-          {meta.pageCount ? (
-            <form
-              className="page-jump"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const n = Number(pageInput);
-                if (Number.isFinite(n)) handle.current?.goToPage?.(clamp(n, 1, meta.pageCount!));
-              }}
-            >
-              <input
-                className="input page-input"
-                value={pageInput}
-                inputMode="numeric"
-                aria-label="Page number"
-                onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
-                onBlur={() => meta.page && setPageInput(String(meta.page))}
+      {!toolbarHidden && (
+        <div className="viewer-toolbar">
+          <div className="toolbar-group">
+            {meta.toc && meta.toc.length > 0 && (
+              <Menu label="Contents" trigger={<ListTree size={18} />} align="start">
+                {(close) => (
+                  <div className="toc-list">
+                    {meta.toc!.map((item, i) => (
+                      <button
+                        key={i}
+                        className="menu-item"
+                        style={{ paddingLeft: 12 + item.depth * 14 }}
+                        onClick={() => {
+                          close();
+                          handle.current?.goToToc?.(item);
+                        }}
+                      >
+                        <span className="clamp-1">{item.label}</span>
+                        {item.page && <span className="muted small">{item.page}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Menu>
+            )}
+            {(highlights.items.length > 0 || highlights.canEdit) && (
+              <HighlightsMenu
+                highlights={highlights.items}
+                visible={hlPrefs.show}
+                onToggleVisible={() => updateHlPrefs({ show: !hlPrefs.show })}
+                onGo={(h) => handle.current?.goToHighlight?.(h)}
+                onRemove={highlights.canEdit ? (h) => highlights.remove(h.id) : undefined}
               />
-              <span className="muted">/ {meta.pageCount}</span>
-            </form>
-          ) : (
-            <span className="viewer-label" title={meta.label}>
-              {meta.label}
-            </span>
-          )}
-          <button className="icon-btn" onClick={() => handle.current?.next()} aria-label="Next page" title="Next (→)">
-            <ChevronRight size={18} />
-          </button>
-          {meta.toc && meta.toc.length > 0 && (
-            <Menu label="Contents" trigger={<ListTree size={18} />} align="start">
-              {(close) => (
-                <div className="toc-list">
-                  {meta.toc!.map((item, i) => (
-                    <button
-                      key={i}
-                      className="menu-item"
-                      style={{ paddingLeft: 12 + item.depth * 14 }}
-                      onClick={() => {
-                        close();
-                        handle.current?.goToToc?.(item);
-                      }}
-                    >
-                      <span className="clamp-1">{item.label}</span>
-                      {item.page && <span className="muted small">{item.page}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Menu>
-          )}
-          {(highlights.items.length > 0 || highlights.canEdit) && (
-            <HighlightsMenu
-              highlights={highlights.items}
-              visible={hlPrefs.show}
-              onToggleVisible={() => updateHlPrefs({ show: !hlPrefs.show })}
-              onGo={(h) => handle.current?.goToHighlight?.(h)}
-              onRemove={highlights.canEdit ? (h) => highlights.remove(h.id) : undefined}
-            />
-          )}
-          {highlights.canEdit && (
-            <HighlighterToggle
-              active={highlighter}
-              color={hlPrefs.color}
-              areaOnly={book.format === 'cbz'}
-              onToggle={() => {
-                setHighlighter((on) => !on);
-                if (!hlPrefs.show) updateHlPrefs({ show: true });
-              }}
-              onColor={(color) => updateHlPrefs({ color })}
-            />
-          )}
-        </div>
-
-        <div className="toolbar-group">
-          {zoomable ? (
-            <>
-              <button
-                className="icon-btn"
-                aria-label="Zoom out"
-                title="Zoom out"
-                onClick={() => updatePrefs({ zoom: clamp(Math.round((prefs.zoom - 0.1) * 10) / 10, 0.4, 4) })}
-              >
-                <Minus size={16} />
-              </button>
-              <button className="btn small ghost zoom-value" title="Reset zoom" onClick={() => updatePrefs({ zoom: 1 })}>
-                {Math.round(prefs.zoom * 100)}%
-              </button>
-              <button
-                className="icon-btn"
-                aria-label="Zoom in"
-                title="Zoom in"
-                onClick={() => updatePrefs({ zoom: clamp(Math.round((prefs.zoom + 0.1) * 10) / 10, 0.4, 4) })}
-              >
-                <Plus size={16} />
-              </button>
-              <button
-                className="icon-btn"
-                aria-label={prefs.fit === 'width' ? 'Fit whole page' : 'Fit width'}
-                title={prefs.fit === 'width' ? 'Fit whole page' : 'Fit width'}
-                onClick={() => updatePrefs({ fit: prefs.fit === 'width' ? 'page' : 'width' })}
-              >
-                {prefs.fit === 'width' ? <Shrink size={16} /> : <StretchHorizontal size={16} />}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                className="icon-btn text-size"
-                aria-label="Smaller text"
-                title="Smaller text"
-                onClick={() => updatePrefs({ fontScale: clamp(Math.round((prefs.fontScale - 0.1) * 10) / 10, 0.7, 2) })}
-              >
-                A−
-              </button>
-              <button
-                className="icon-btn text-size large"
-                aria-label="Larger text"
-                title="Larger text"
-                onClick={() => updatePrefs({ fontScale: clamp(Math.round((prefs.fontScale + 0.1) * 10) / 10, 0.7, 2) })}
-              >
-                A+
-              </button>
-            </>
-          )}
-          <div className="segmented" role="radiogroup" aria-label="Page colour">
-            {THEME_OPTIONS.map(({ value, label, Icon }) => (
-              <button
-                key={value}
-                role="radio"
-                aria-checked={prefs.theme === value}
-                className={cx(prefs.theme === value && 'active')}
-                onClick={() => updatePrefs({ theme: value })}
-                title={label}
-                aria-label={label}
-              >
-                <Icon size={14} />
-              </button>
-            ))}
+            )}
+            {highlights.canEdit && (
+              <HighlighterToggle
+                active={highlighter}
+                color={hlPrefs.color}
+                areaOnly={book.format === 'cbz'}
+                onToggle={() => {
+                  setHighlighter((on) => !on);
+                  if (!hlPrefs.show) updateHlPrefs({ show: true });
+                }}
+                onColor={(color) => updateHlPrefs({ color })}
+              />
+            )}
           </div>
-          <button
-            className="icon-btn"
-            onClick={toggleFullscreen}
-            aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
-            title={fullscreen ? 'Exit full screen' : 'Full screen'}
-          >
-            {fullscreen ? <Shrink size={16} /> : <Maximize size={16} />}
-          </button>
-        </div>
-        {status && <div className="toolbar-status">{status}</div>}
-      </div>
 
-      <div className="viewer-body">
+          <div className="toolbar-group">
+            {zoomable ? (
+              <>
+                <button
+                  className="icon-btn"
+                  aria-label="Zoom out"
+                  title="Zoom out"
+                  onClick={() =>
+                    updatePrefs({
+                      zoom: clamp(Math.round((prefs.zoom - 0.1) * 10) / 10, 0.4, 4),
+                    })
+                  }
+                >
+                  <Minus size={16} />
+                </button>
+                <button className="btn small ghost zoom-value" title="Reset zoom" onClick={() => updatePrefs({ zoom: 1 })}>
+                  {Math.round(prefs.zoom * 100)}%
+                </button>
+                <button
+                  className="icon-btn"
+                  aria-label="Zoom in"
+                  title="Zoom in"
+                  onClick={() =>
+                    updatePrefs({
+                      zoom: clamp(Math.round((prefs.zoom + 0.1) * 10) / 10, 0.4, 4),
+                    })
+                  }
+                >
+                  <Plus size={16} />
+                </button>
+                <button
+                  className="icon-btn"
+                  aria-label={prefs.fit === 'width' ? 'Fit whole page' : 'Fit width'}
+                  title={prefs.fit === 'width' ? 'Fit whole page' : 'Fit width'}
+                  onClick={() =>
+                    updatePrefs({
+                      fit: prefs.fit === 'width' ? 'page' : 'width',
+                    })
+                  }
+                >
+                  {prefs.fit === 'width' ? <Shrink size={16} /> : <StretchHorizontal size={16} />}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="icon-btn text-size"
+                  aria-label="Smaller text"
+                  title="Smaller text"
+                  onClick={() =>
+                    updatePrefs({
+                      fontScale: clamp(Math.round((prefs.fontScale - 0.1) * 10) / 10, 0.7, 2),
+                    })
+                  }
+                >
+                  A−
+                </button>
+                <button
+                  className="icon-btn text-size large"
+                  aria-label="Larger text"
+                  title="Larger text"
+                  onClick={() =>
+                    updatePrefs({
+                      fontScale: clamp(Math.round((prefs.fontScale + 0.1) * 10) / 10, 0.7, 2),
+                    })
+                  }
+                >
+                  A+
+                </button>
+              </>
+            )}
+            <div className="segmented" role="radiogroup" aria-label="Page colour">
+              {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={prefs.theme === value}
+                  className={cx(prefs.theme === value && 'active')}
+                  onClick={() => updatePrefs({ theme: value })}
+                  title={label}
+                  aria-label={label}
+                >
+                  <Icon size={14} />
+                </button>
+              ))}
+            </div>
+            <button
+              className="icon-btn"
+              onClick={toggleFullscreen}
+              aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+              title={fullscreen ? 'Exit full screen' : 'Full screen'}
+            >
+              {fullscreen ? <Shrink size={16} /> : <Maximize size={16} />}
+            </button>
+          </div>
+          {status && <div className="toolbar-status">{status}</div>}
+        </div>
+      )}
+
+      <div className="viewer-body" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         {error ? (
           <div className="viewer-message">
             <p>{error}</p>
@@ -494,6 +536,49 @@ export function BookViewer({
               setSelection(null);
             }}
           />
+        )}
+        {data && !error && (
+          // Page controls float at the bottom of the page, where your eyes are when a page ends.
+          <div className="page-nav-dock">
+            {toolbarHidden && floatingStatus && <div className="floating-status">{floatingStatus}</div>}
+            <div className="page-nav" role="group" aria-label="Page navigation">
+              <button
+                className="icon-btn ghost"
+                onClick={() => handle.current?.prev()}
+                aria-label="Previous page"
+                title="Previous (←)"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              {meta.pageCount ? (
+                <form
+                  className="page-jump"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const n = Number(pageInput);
+                    if (Number.isFinite(n)) handle.current?.goToPage?.(clamp(n, 1, meta.pageCount!));
+                  }}
+                >
+                  <input
+                    className="input page-input"
+                    value={pageInput}
+                    inputMode="numeric"
+                    aria-label="Page number"
+                    onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
+                    onBlur={() => meta.page && setPageInput(String(meta.page))}
+                  />
+                  <span className="muted">/ {meta.pageCount}</span>
+                </form>
+              ) : (
+                <span className="viewer-label" title={meta.label}>
+                  {meta.label}
+                </span>
+              )}
+              <button className="icon-btn ghost" onClick={() => handle.current?.next()} aria-label="Next page" title="Next (→)">
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
         )}
         {overlay}
       </div>

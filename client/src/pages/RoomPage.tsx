@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  ChevronsDown,
+  ChevronsUp,
   Eye,
   LibraryBig,
   Link2,
@@ -63,6 +65,14 @@ export function RoomPage({ roomId }: { roomId: string }) {
   const [tab, setTabState] = useState<Tab>(() => loadPref<{ tab: Tab }>('tab', { tab: 'queue' }).tab);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia('(min-width: 960px)').matches);
   const [unread, setUnread] = useState(0);
+  // Collapsible top and bottom bars, remembered between visits.
+  const [layout, setLayout] = useState(() => loadPref('layout', { topHidden: false, turnBarHidden: false }));
+  const updateLayout = (patch: Partial<typeof layout>) =>
+    setLayout((current) => {
+      const next = { ...current, ...patch };
+      savePref('layout', next);
+      return next;
+    });
   const [personal, updatePersonal] = usePersonalPrefs();
   const [following, setFollowing] = useState(true);
   const [localPosition, setLocalPosition] = useState<Position | null>(null);
@@ -89,6 +99,14 @@ export function RoomPage({ roomId }: { roomId: string }) {
     setVersion((v) => v + 1);
   }, [controller, state?.activeBookId]);
 
+  // Pop the turn bar back open when it's your move, so Finish / Start is never hidden.
+  const myMove = Boolean(view && (view.isReader || (!state?.reader && view.nextUp?.id === view.me.id)));
+  useEffect(() => {
+    if (myMove) setLayout((current) => (current.turnBarHidden ? { ...current, turnBarHidden: false } : current));
+  }, [myMove]);
+
+  useWakeLock(Boolean(activeBook));
+
   // Count unread chat messages while the chat is hidden.
   const seenMessages = useRef(0);
   useEffect(() => {
@@ -108,7 +126,9 @@ export function RoomPage({ roomId }: { roomId: string }) {
       toast.show("It's your turn to read! Unmute on Discord and go ahead.", 'success');
       if (personal.sound) playChime();
       if (personal.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        new Notification(`Your turn in ${state.name}`, { body: activeBook ? `Time to read “${activeBook.title}”.` : undefined });
+        new Notification(`Your turn in ${state.name}`, {
+          body: activeBook ? `Time to read “${activeBook.title}”.` : undefined,
+        });
       }
     }
     previousReader.current = readerId;
@@ -231,51 +251,78 @@ export function RoomPage({ roomId }: { roomId: string }) {
     );
   }
 
+  const sidebarToggle = (
+    <button
+      className="icon-btn ghost sidebar-toggle"
+      onClick={() => {
+        setSidebarOpen((v) => !v);
+        if (!sidebarOpen && tab === 'chat') setUnread(0);
+      }}
+      aria-label={sidebarOpen ? 'Hide side panel' : 'Show side panel'}
+      title={sidebarOpen ? 'Hide side panel' : 'Show side panel'}
+    >
+      {sidebarOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+      {!sidebarOpen && unread > 0 && <span className="badge">{unread}</span>}
+    </button>
+  );
+
   return (
-    <div className="room-page">
-      <header className="room-header">
-        <Link href="/" className="icon-btn ghost" aria-label="Back to rooms" title="All rooms">
-          <ArrowLeft size={18} />
-        </Link>
-        <div className="room-title">
-          <h1 className="clamp-1">{state.name}</h1>
-          <span className="muted small clamp-1">
-            {activeBook
-              ? activeBook.title.toLowerCase() === state.name.toLowerCase()
-                ? activeBook.author
-                  ? `by ${activeBook.author}`
-                  : `${activeBook.format.toUpperCase()} book`
-                : [activeBook.title, activeBook.author].filter(Boolean).join(' — ')
-              : 'No book open'}{' '}
-            ·{' '}
-            <Users size={12} aria-hidden /> {state.members.length} here
-          </span>
-        </div>
-        {!room.connected && (
-          <span className="status-pill warn">
-            <WifiOff size={14} aria-hidden /> Reconnecting…
-          </span>
-        )}
-        <button className="icon-btn ghost" onClick={copyInvite} aria-label="Copy invite link" title="Copy invite link for Discord">
-          <Link2 size={18} />
-        </button>
-        <button
-          className="icon-btn ghost sidebar-toggle"
-          onClick={() => {
-            setSidebarOpen((v) => !v);
-            if (!sidebarOpen && tab === 'chat') setUnread(0);
-          }}
-          aria-label={sidebarOpen ? 'Hide side panel' : 'Show side panel'}
-          title={sidebarOpen ? 'Hide side panel' : 'Show side panel'}
-        >
-          {sidebarOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-          {!sidebarOpen && unread > 0 && <span className="badge">{unread}</span>}
-        </button>
-        <UserMenu />
-      </header>
+    <div className={cx('room-page', layout.topHidden && 'top-hidden')}>
+      {!layout.topHidden && (
+        <header className="room-header">
+          <Link href="/" className="icon-btn ghost" aria-label="Back to rooms" title="All rooms">
+            <ArrowLeft size={18} />
+          </Link>
+          <div className="room-title">
+            <h1 className="clamp-1">{state.name}</h1>
+            <span className="muted small clamp-1">
+              {activeBook
+                ? activeBook.title.toLowerCase() === state.name.toLowerCase()
+                  ? activeBook.author
+                    ? `by ${activeBook.author}`
+                    : `${activeBook.format.toUpperCase()} book`
+                  : [activeBook.title, activeBook.author].filter(Boolean).join(' — ')
+                : 'No book open'}{' '}
+              ·{' '}
+              <Users size={12} aria-hidden /> {state.members.length} here
+            </span>
+          </div>
+          {!room.connected && (
+            <span className="status-pill warn">
+              <WifiOff size={14} aria-hidden /> Reconnecting…
+            </span>
+          )}
+          <button className="icon-btn ghost" onClick={copyInvite} aria-label="Copy invite link" title="Copy invite link for Discord">
+            <Link2 size={18} />
+          </button>
+          <button
+            className="icon-btn ghost"
+            onClick={() => updateLayout({ topHidden: true })}
+            aria-label="Hide top bar"
+            title="Hide the top bars for more reading space"
+          >
+            <ChevronsUp size={18} />
+          </button>
+          {sidebarToggle}
+          <UserMenu />
+        </header>
+      )}
 
       <div className={cx('room-body', sidebarOpen && 'sidebar-open')}>
         <main className="room-main">
+          {layout.topHidden && (
+            <div className="focus-controls">
+              {!room.connected && (
+                <span className="status-pill warn" title="Reconnecting…">
+                  <WifiOff size={14} aria-hidden />
+                </span>
+              )}
+              <button className="icon-btn ghost" onClick={() => updateLayout({ topHidden: false })} aria-label="Show top bar" title="Show the top bars">
+                <ChevronsDown size={18} />
+              </button>
+              {sidebarToggle}
+            </div>
+          )}
           {activeBook ? (
             <BookViewer
               key={activeBook.id}
@@ -284,6 +331,8 @@ export function RoomPage({ roomId }: { roomId: string }) {
               onNavigate={onNavigate}
               cues={cues}
               status={status}
+              toolbarHidden={layout.topHidden}
+              floatingStatus={!controller && !following ? status : undefined}
               highlights={viewerHighlights}
               dictionary={Boolean(config.dictionary) && personal.dictionary}
               onPageCount={(count) => {
@@ -316,7 +365,13 @@ export function RoomPage({ roomId }: { roomId: string }) {
               )}
             </div>
           )}
-          <TurnBar state={state} view={view} room={room} />
+          <TurnBar
+            state={state}
+            view={view}
+            room={room}
+            collapsed={layout.turnBarHidden}
+            onCollapsedChange={(turnBarHidden) => updateLayout({ turnBarHidden })}
+          />
         </main>
 
         <aside className="room-sidebar" aria-label="Room panel">
@@ -348,4 +403,31 @@ export function RoomPage({ roomId }: { roomId: string }) {
       </div>
     </div>
   );
+}
+
+/** Keeps a phone or tablet screen from dimming while a book is open. */
+function useWakeLock(active: boolean) {
+  useEffect(() => {
+    if (!active || !('wakeLock' in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    let cancelled = false;
+    const request = async () => {
+      if (document.visibilityState !== 'visible' || (lock && !lock.released)) return;
+      try {
+        const next = await navigator.wakeLock.request('screen');
+        if (cancelled) void next.release();
+        else lock = next;
+      } catch {
+        /* not allowed (battery saver, iframe, …) */
+      }
+    };
+    void request();
+    // The lock is dropped whenever the tab is hidden; take it again on return.
+    document.addEventListener('visibilitychange', request);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', request);
+      void lock?.release().catch(() => {});
+    };
+  }, [active]);
 }

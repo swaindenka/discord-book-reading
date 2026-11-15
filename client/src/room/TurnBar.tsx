@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { CalendarPlus, Check, Hand, LogOut, Mic, Play, SkipForward, UserPlus } from 'lucide-react';
+import { CalendarPlus, Check, ChevronDown, ChevronUp, Hand, LogOut, Mic, Play, SkipForward, UserPlus } from 'lucide-react';
 import { downloadCalendarInvite, formatSession, isUpcoming } from '../schedule';
 import type { RoomState } from '../../../shared/types';
 import { Avatar } from '../components/ui';
@@ -8,7 +8,20 @@ import { useToast } from '../components/Toasts';
 import { useNow, type RoomPerspective } from './common';
 import type { RoomApi } from './useRoom';
 
-export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPerspective; room: RoomApi }) {
+export function TurnBar({
+  state,
+  view,
+  room,
+  collapsed = false,
+  onCollapsedChange,
+}: {
+  state: RoomState;
+  view: RoomPerspective;
+  room: RoomApi;
+  /** Collapsed: a small pill in the corner instead of the full bar. */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
+}) {
   const now = useNow(1000);
   const { reader } = state;
   const { actions } = room;
@@ -27,6 +40,41 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
     toast.show(`Your ${state.settings.turnMinutes} minutes are up. Finish at a good stopping point.`, 'info');
   }, [overTime, view.isReader, reader, state.settings.turnMinutes, toast]);
 
+  const timer = (
+    <span className={cx(overTime && 'over-time')}>
+      {formatDuration(elapsed)}
+      {limitMs > 0 && ` / ${formatDuration(limitMs)}`}
+    </span>
+  );
+
+  if (collapsed) {
+    return (
+      <button
+        className={cx('turn-pill', view.isReader && 'my-turn', overTime && 'over')}
+        onClick={() => onCollapsedChange?.(false)}
+        aria-label="Show turn bar"
+        title="Show the turn bar"
+      >
+        {reader ? (
+          <>
+            <Avatar id={reader.id} name={reader.name} url={reader.avatarUrl} size={22} online={reader.online} />
+            <span className="turn-pill-name clamp-1">{view.isReader ? 'Your turn' : reader.name}</span>
+            <span className={cx('turn-pill-time', overTime && 'over-time')}>{formatDuration(elapsed)}</span>
+          </>
+        ) : (
+          <span className="turn-pill-name">
+            {view.queueIndex >= 0
+              ? `#${view.queueIndex + 1} in line`
+              : state.queue.length
+                ? `${state.queue.length} in line`
+                : 'Nobody reading'}
+          </span>
+        )}
+        <ChevronUp size={16} aria-hidden />
+      </button>
+    );
+  }
+
   return (
     <div className={cx('turn-bar', view.isReader && 'my-turn')}>
       {reader && limitMs > 0 && (
@@ -41,12 +89,8 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
             <div className="turn-text">
               <strong>{view.isReader ? 'Your turn to read' : `${reader.name} is reading`}</strong>
               <span className="muted small">
-                <Mic size={12} aria-hidden />{' '}
-                <span className={cx(overTime && 'over-time')}>
-                  {formatDuration(elapsed)}
-                  {limitMs > 0 && ` / ${formatDuration(limitMs)}`}
-                  {overTime && ' · over time'}
-                </span>
+                <Mic size={12} aria-hidden /> {timer}
+                {overTime && <span className="over-time"> · over time</span>}
                 {!reader.online && ' · disconnected'}
                 {state.queue.length > 0 && view.nextUp && ` · next: ${view.nextUp.id === view.me.id ? 'you' : view.nextUp.name}`}
               </span>
@@ -119,6 +163,16 @@ export function TurnBar({ state, view, room }: { state: RoomState; view: RoomPer
               </button>
             )}
           </>
+        )}
+        {onCollapsedChange && (
+          <button
+            className="icon-btn ghost turn-collapse"
+            onClick={() => onCollapsedChange(true)}
+            aria-label="Hide turn bar"
+            title="Hide the turn bar"
+          >
+            <ChevronDown size={18} />
+          </button>
         )}
       </div>
     </div>
